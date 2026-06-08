@@ -4,6 +4,7 @@ import httpx
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from pydantic import BaseModel, HttpUrl
 
+from app.services.cors_origins import invalidate_cors_cache
 from app.services.crawler import crawl_site, save_site_image
 from app.services.crawl_progress import complete_progress, fail_progress, get_progress
 from app.services.formation_context import ingest_formation_pages, refresh_formation_profiles
@@ -61,6 +62,7 @@ async def _crawl_and_embed(site_id: str, url: str):
         supabase.table("sites").update(
             {"crawl_status": "completed", "last_crawled_at": "now()"}
         ).eq("id", site_id).execute()
+        invalidate_cors_cache()
     except Exception:
         logger.exception("Crawl échoué — site_id=%s", site_id)
         fail_progress(site_id)

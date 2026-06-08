@@ -1,9 +1,9 @@
 import logging
 
 from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
+from app.middleware.dynamic_cors import DynamicCorsMiddleware
 from app.routers import chat, crawl, health, leads, webhooks, widget
 
 logging.basicConfig(
@@ -14,14 +14,8 @@ logging.basicConfig(
 
 app = FastAPI(title=settings.app_name, version="0.1.0")
 
-_cors = settings.cors_origins_list
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"] if "*" in _cors else _cors,
-    allow_credentials="*" not in _cors,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# CORS dynamique : domaines des sites actifs (Supabase) + APP_URL + CORS_ORIGINS
+app.add_middleware(DynamicCorsMiddleware)
 
 app.include_router(health.router)
 app.include_router(crawl.router, prefix="/api/v1", tags=["crawl"])
