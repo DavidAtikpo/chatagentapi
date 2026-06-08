@@ -33,8 +33,14 @@ TOPIC_TRIGGERS: dict[str, tuple[str, ...]] = {
         "courant",
         "foucault",
     ),
-    "cordiste_togo": ("cordiste", "irata", "togo", "cordes", "hauteur"),
-    "cordiste_france": ("cordiste", "irata", "france", "cordes", "hauteur", "bordeaux"),
+    "cordiste_togo": ("cordiste", "irata", "cordes", "hauteur", "corde"),
+    "cordiste_france": ("cordiste", "irata", "france", "cordes", "hauteur", "bordeaux", "corde"),
+}
+
+PROFILE_SESSION_REGION: dict[str, str] = {
+    "cnd_togo": "cnd",
+    "cordiste_togo": "togo",
+    "cordiste_france": "france",
 }
 
 
@@ -94,28 +100,72 @@ def refresh_formation_profiles(site_id: str) -> int:
     return len(profiles)
 
 
+def _has_cnd_intent(query: str) -> bool:
+    lowered = query.lower()
+    return any(trigger in lowered for trigger in TOPIC_TRIGGERS["cnd_togo"])
+
+
+def _has_cordiste_intent(query: str) -> bool:
+    lowered = query.lower()
+    return any(t in lowered for t in ("cordiste", "irata", "cordes", "hauteur", "corde"))
+
+
 def match_formation_profiles(profiles: list[dict], query: str) -> list[dict]:
     if not profiles:
         return []
 
     lowered = query.lower()
+
+    if _has_cnd_intent(lowered):
+        cnd = next((p for p in profiles if p.get("key") == "cnd_togo"), None)
+        if cnd:
+            return [cnd]
+
     matched: list[dict] = []
+    has_togo_geo = any(t in lowered for t in ("togo", "🇹🇬", "lomé", "lome", "aneho"))
+    has_france_geo = any(t in lowered for t in ("france", "🇫🇷", "bordeaux"))
 
     for profile in profiles:
-        triggers = TOPIC_TRIGGERS.get(profile.get("key", ""), ())
+        key = profile.get("key", "")
+        triggers = TOPIC_TRIGGERS.get(key, ())
+        if key == "cordiste_france" and has_togo_geo and not has_france_geo:
+            continue
+        if key == "cordiste_togo" and has_france_geo and not has_togo_geo:
+            continue
         if any(trigger in lowered for trigger in triggers):
+            matched.append(profile)
+            continue
+        if key == "cordiste_togo" and has_togo_geo and not _has_cnd_intent(lowered):
+            matched.append(profile)
+        elif key == "cordiste_france" and has_france_geo and not _has_cnd_intent(lowered):
             matched.append(profile)
 
     if matched:
         return matched
 
     if any(t in lowered for t in ("prix", "tarif", "coût", "cout", "combien")):
-        if any(t in lowered for t in TOPIC_TRIGGERS["cnd_togo"]):
+        if _has_cnd_intent(lowered):
             cnd = next((p for p in profiles if p.get("key") == "cnd_togo"), None)
             if cnd:
                 return [cnd]
 
     return []
+
+
+def filter_sessions_for_profiles(sessions: list[dict], matched_profiles: list[dict]) -> list[dict]:
+    if not matched_profiles or not sessions:
+        return sessions
+
+    regions = {
+        PROFILE_SESSION_REGION[p["key"]]
+        for p in matched_profiles
+        if p.get("key") in PROFILE_SESSION_REGION
+    }
+    if not regions:
+        return sessions
+
+    filtered = [s for s in sessions if s.get("region") in regions]
+    return filtered or sessions
 
 
 def format_formation_profiles(profiles: list[dict]) -> str:

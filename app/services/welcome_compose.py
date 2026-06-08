@@ -18,17 +18,6 @@ _BAD_WELCOME_MARKERS = (
 
 FORMATION_CATALOG: tuple[dict[str, Any], ...] = (
     {
-        "key": "cordiste_togo",
-        "title": "🇹🇬 Formation Cordiste IRATA — Togo",
-        "profile_key": "cordiste_togo",
-        "session_regions": ("togo",),
-        "default_price": (
-            "325 000 FCFA net hors hébergement (Ghana-Togo-Bénin) · "
-            "450 000 FCFA net hébergement inclus · 5 à 6 jours + 1 jour d'examen"
-        ),
-        "default_url": "https://cides.tf/formations-accueil/formation-togo/formation-cordistes/",
-    },
-    {
         "key": "cordiste_france",
         "title": "🇫🇷 Formation Cordiste IRATA — France",
         "profile_key": "cordiste_france",
@@ -38,6 +27,17 @@ FORMATION_CATALOG: tuple[dict[str, Any], ...] = (
             "5 jours de formation + 1 jour d'examen IRATA"
         ),
         "default_url": "https://cides.tf/formations-accueil/formation-france/formation-cordistes/",
+    },
+    {
+        "key": "cordiste_togo",
+        "title": "🇹🇬 Formation Cordiste IRATA — Togo",
+        "profile_key": "cordiste_togo",
+        "session_regions": ("togo",),
+        "default_price": (
+            "325 000 FCFA net hors hébergement (Ghana-Togo-Bénin) · "
+            "450 000 FCFA net hébergement inclus · 5 à 6 jours + 1 jour d'examen"
+        ),
+        "default_url": "https://cides.tf/formations-accueil/formation-togo/formation-cordistes/",
     },
     {
         "key": "cnd_togo",
@@ -210,7 +210,7 @@ def build_full_welcome(
         f"Bienvenue chez {site_name} ! 👋",
         "",
         "CI.DES — centre de formations certifiantes en travail sur cordes (IRATA) "
-        "et contrôle non destructif / CND (ISO 9712), au Togo et en France.",
+        "et contrôle non destructif / CND (ISO 9712), en France et au Togo.",
         "",
         "Voici nos formations, tarifs et prochaines sessions disponibles :",
     ]

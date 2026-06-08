@@ -6,7 +6,11 @@ from anthropic import AsyncAnthropic
 
 from app.config import settings
 from app.services.country_utils import detect_country_from_text, enrich_qualification_country, normalize_country
-from app.services.formation_context import format_formation_profiles, match_formation_profiles
+from app.services.formation_context import (
+    filter_sessions_for_profiles,
+    format_formation_profiles,
+    match_formation_profiles,
+)
 from app.services.plans import has_pro_features
 from app.services.rag import get_site_overview, search_knowledge
 from app.services.session_dates import filter_upcoming_sessions
@@ -246,7 +250,8 @@ async def stream_chat(
             + format_formation_profiles(matched_profiles)
         )
 
-    training_sessions = filter_upcoming_sessions(agent_config.get("training_sessions") or [])
+    all_upcoming = filter_upcoming_sessions(agent_config.get("training_sessions") or [])
+    training_sessions = filter_sessions_for_profiles(all_upcoming, matched_profiles)
     if training_sessions:
         system += "\n\nSessions d'inscription à venir (URLs exactes — à utiliser pour les boutons [[SESSION:...|url]]) :\n"
         for session in training_sessions:
@@ -256,9 +261,13 @@ async def stream_chat(
                 f"{session.get('url')}\n"
             )
         system += (
-            "\nRègle sessions : réponds avec une courte intro (2 phrases max) "
+            "\nCatégories : [cnd] = formation inspection / CND / NDT ISO 9712 (Togo), "
+            "[togo] = cordiste IRATA (Togo), [france] = cordiste IRATA (France). "
+            "Ne mélange jamais cordiste et CND : si le visiteur parle de CND, inspection ou NDT, "
+            "utilise UNIQUEMENT les sessions [cnd].\n"
+            "Règle sessions : réponds avec une courte intro (2 phrases max) "
             "puis UNIQUEMENT des lignes [[SESSION:label|url]] pour chaque session ci-dessus "
-            "de la catégorie/région demandée. Pas de liste numérotée en texte seul."
+            "de la catégorie demandée. Pas de liste numérotée en texte seul."
         )
 
     contact_block = _contact_context_block(site_config)

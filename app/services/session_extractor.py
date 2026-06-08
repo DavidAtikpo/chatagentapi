@@ -17,7 +17,7 @@ FORMATION_PATHS = (
 
 def _is_session_href(path: str) -> bool:
     p = path.lower().rstrip("/")
-    if re.search(r"sessions-(?:togo|france|afrique)/\d+", p):
+    if re.search(r"sessions-(?:togo|france|afrique|ut)/\d+", p):
         return True
     if re.fullmatch(r"/sessions/\d+", p):
         return True
@@ -27,9 +27,9 @@ def _is_session_href(path: str) -> bool:
 def _session_region(url: str, page_url: str = "") -> str:
     lowered = url.lower()
     page = page_url.lower()
-    if "formation-inspection" in page or "inspection-tg" in page:
+    if "sessions-ut" in lowered or "formation-inspection" in page or "inspection-tg" in page:
         return "cnd"
-    if "sessions-togo" in lowered or "formation-togo" in page:
+    if "sessions-togo" in lowered or ("formation-togo" in page and "inspection" not in page):
         return "togo"
     if "sessions-france" in lowered or "formation-france" in page:
         return "france"
