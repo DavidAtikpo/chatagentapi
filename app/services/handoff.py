@@ -5,6 +5,8 @@ import logging
 import re
 from datetime import datetime, timezone
 
+from postgrest.exceptions import APIError
+
 from app.services.push_notifications import notify_org_handoff
 from app.services.supabase_client import get_supabase
 
@@ -172,17 +174,26 @@ def release_handoff(conversation_id: str) -> None:
 def insert_human_message(conversation_id: str, content: str, agent_name: str | None = None) -> dict:
     supabase = get_supabase()
     prefix = f"**{agent_name}** : " if agent_name else ""
-    row = (
-        supabase.table("messages")
-        .insert(
-            {
-                "conversation_id": conversation_id,
-                "role": "human",
-                "content": prefix + content if prefix else content,
-            }
+    try:
+        row = (
+            supabase.table("messages")
+            .insert(
+                {
+                    "conversation_id": conversation_id,
+                    "role": "human",
+                    "content": prefix + content if prefix else content,
+                }
+            )
+            .execute()
         )
-        .execute()
-    )
+    except APIError as exc:
+        msg = str(exc)
+        if "human" in msg.lower() or "check constraint" in msg.lower():
+            raise ValueError(
+                "Rôle 'human' non autorisé — exécutez 010_messages_human_role.sql dans Supabase."
+            ) from exc
+        raise ValueError(msg) from exc
+
     supabase.table("conversations").update({"updated_at": "now()"}).eq(
         "id", conversation_id
     ).execute()

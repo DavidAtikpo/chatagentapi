@@ -133,7 +133,13 @@ async def send_agent_message(
     )
     name = (member.data[0]["display_name"] if member.data else None) or "Conseiller"
 
-    msg = insert_human_message(conversation_id, payload.content.strip(), name)
+    try:
+        msg = insert_human_message(conversation_id, payload.content.strip(), name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("send_agent_message failed conv=%s", conversation_id)
+        raise HTTPException(status_code=500, detail="Impossible d'enregistrer le message") from exc
     return {"message": msg}
 
 

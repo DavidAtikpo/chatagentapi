@@ -206,21 +206,6 @@ class _QualificationStreamFilter:
         return visible
 
 
-async def stream_handoff_visitor_message(
-    site_id: str,
-    conversation_id: str,
-    user_message: str,
-    site_config: dict,
-):
-    """Visiteur en mode handoff : enregistre le message, pas de réponse IA."""
-    insert_user_message_only(conversation_id, user_message)
-    status = (get_conversation_handoff(conversation_id) or {}).get("handoff_status", "requested")
-    if status == "requested":
-        yield "Un conseiller va vous répondre sous peu. Merci de patienter…"
-    else:
-        yield "Votre message a été transmis au conseiller."
-
-
 async def stream_chat(
     site_id: str,
     conversation_id: str,
@@ -230,10 +215,8 @@ async def stream_chat(
 ):
     handoff = get_conversation_handoff(conversation_id)
     if handoff and is_handoff_active(handoff.get("handoff_status")):
-        async for token in stream_handoff_visitor_message(
-            site_id, conversation_id, user_message, site_config
-        ):
-            yield token
+        # Enregistre le message visiteur — pas de réponse auto (le conseiller répond via l'app)
+        insert_user_message_only(conversation_id, user_message)
         return
 
     supabase = get_supabase()
