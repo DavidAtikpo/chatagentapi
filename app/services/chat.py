@@ -165,6 +165,11 @@ def _fetch_message_history(conversation_id: str) -> list[dict]:
     return result.data or []
 
 
+def _llm_role(role: str) -> str:
+    """Claude n'accepte que user/assistant — les messages conseiller (human) → assistant."""
+    return "user" if role == "user" else "assistant"
+
+
 def _format_context_chunk(chunk: dict) -> str:
     content = chunk.get("content", "")
     if len(content) > _MAX_CHUNK_CHARS:
@@ -237,7 +242,10 @@ async def stream_chat(
 
     context = "\n\n---\n\n".join(_format_context_chunk(chunk) for chunk in context_chunks)
 
-    messages = [{"role": row["role"], "content": row["content"]} for row in history_rows]
+    messages = [
+        {"role": _llm_role(row["role"]), "content": row["content"]}
+        for row in history_rows
+    ]
     messages.append({"role": "user", "content": user_message})
 
     system = SYSTEM_PROMPT.format(

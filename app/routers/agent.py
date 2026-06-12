@@ -13,6 +13,7 @@ from app.services.auth import (
     user_organization_ids,
 )
 from app.services.handoff import claim_handoff, insert_human_message, release_handoff
+from app.services.owner_stats import fetch_owner_stats
 from app.services.supabase_client import get_supabase
 
 logger = logging.getLogger(__name__)
@@ -26,6 +27,18 @@ class AgentMessageRequest(BaseModel):
 class DeviceTokenRequest(BaseModel):
     token: str = Field(min_length=10)
     platform: str = Field(pattern="^(android|ios|web)$")
+
+
+@router.get("/owner-stats")
+async def owner_stats(agent: AgentUser = Depends(get_current_agent)):
+    """Tableau de bord mobile — réservé au propriétaire du compte."""
+    data = fetch_owner_stats(agent.user_id)
+    if not data:
+        raise HTTPException(
+            status_code=403,
+            detail="Réservé au propriétaire du compte (client principal)",
+        )
+    return data
 
 
 @router.get("/inbox")
