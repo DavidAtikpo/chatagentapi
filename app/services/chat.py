@@ -14,6 +14,14 @@ from app.services.formation_context import (
 from app.services.plans import has_pro_features
 from app.services.rag import get_site_overview, search_knowledge
 from app.services.session_dates import filter_upcoming_sessions
+from app.services.handoff import (
+    detect_handoff_reason,
+    extract_handoff_marker,
+    get_conversation_handoff,
+    insert_user_message_only,
+    is_handoff_active,
+    request_handoff,
+)
 from app.services.supabase_client import get_supabase
 
 SYSTEM_PROMPT = """Tu es l'assistant du site web « {site_name} ».
@@ -35,6 +43,7 @@ Objectifs :
 3. Qualifier le prospect (besoin, disponibilité, budget) quand c'est pertinent
 4. Proposer le lien d'achat/inscription/contact au bon moment
 5. Si le visiteur veut contacter l'équipe, oriente-le vers les boutons WhatsApp / Appel / Email (voir contacts ci-dessous)
+6. Handoff humain : si le visiteur demande un conseiller/humain, si tu ne peux pas répondre avec le contexte, ou si le lead est très chaud, ajoute après le bloc qualification : <!--HANDOFF:user_request--> ou <!--HANDOFF:ai_escalation--> ou <!--HANDOFF:hot_lead-->
 
 Règles :
 - Langue par défaut du site : {language_label}
@@ -197,6 +206,21 @@ class _QualificationStreamFilter:
         return visible
 
 
+async def stream_handoff_visitor_message(
+    site_id: str,
+    conversation_id: str,
+    user_message: str,
+    site_config: dict,
+):
+    """Visiteur en mode handoff : enregistre le message, pas de réponse IA."""
+    insert_user_message_only(conversation_id, user_message)
+    status = (get_conversation_handoff(conversation_id) or {}).get("handoff_status", "requested")
+    if status == "requested":
+        yield "Un conseiller va vous répondre sous peu. Merci de patienter…"
+    else:
+        yield "Votre message a été transmis au conseiller."
+
+
 async def stream_chat(
     site_id: str,
     conversation_id: str,
@@ -204,6 +228,14 @@ async def stream_chat(
     site_config: dict,
     ip_country: str | None = None,
 ):
+    handoff = get_conversation_handoff(conversation_id)
+    if handoff and is_handoff_active(handoff.get("handoff_status")):
+        async for token in stream_handoff_visitor_message(
+            site_id, conversation_id, user_message, site_config
+        ):
+            yield token
+        return
+
     supabase = get_supabase()
     overview_chunks, query_chunks, history_rows = await asyncio.gather(
         asyncio.to_thread(get_site_overview, site_id, 3),
@@ -292,6 +324,7 @@ async def stream_chat(
                 yield visible
 
     clean_response, qualification = _extract_qualification(full_response)
+    clean_response, handoff_marker = extract_handoff_marker(clean_response)
 
     supabase.table("messages").insert(
         {"conversation_id": conversation_id, "role": "user", "content": user_message}
@@ -360,3 +393,23 @@ async def stream_chat(
                     "data": {"conversation_id": conversation_id, "qualification": qualification},
                 }
             ).execute()
+
+    lead_score = (qualification or {}).get("score", 0) if qualification else 0
+    handoff_reason = handoff_marker or detect_handoff_reason(user_message, lead_score)
+    if handoff_reason and not is_handoff_active((handoff or {}).get("handoff_status")):
+        site_row = (
+            supabase.table("sites")
+            .select("organization_id, name")
+            .eq("id", site_id)
+            .single()
+            .execute()
+        )
+        if site_row.data:
+            request_handoff(
+                conversation_id,
+                site_row.data["organization_id"],
+                handoff_reason,
+                site_row.data.get("name", "Chat"),
+            )
+            if handoff_reason == "user_request" and "conseiller" not in clean_response.lower():
+                yield "\n\nJe vous mets en relation avec un conseiller humain. Un instant…"

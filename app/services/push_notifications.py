@@ -1,0 +1,138 @@
+"""Notifications push Firebase Cloud Messaging (HTTP v1)."""
+
+import json
+import logging
+from typing import Any
+
+import httpx
+from google.auth.transport.requests import Request
+from google.oauth2 import service_account
+
+from app.config import settings
+from app.services.supabase_client import get_supabase
+
+logger = logging.getLogger(__name__)
+
+FCM_SCOPE = "https://www.googleapis.com/auth/firebase.messaging"
+
+
+def _firebase_enabled() -> bool:
+    return bool(settings.firebase_service_account_json.strip())
+
+
+def _credentials():
+    info = json.loads(settings.firebase_service_account_json)
+    return service_account.Credentials.from_service_account_info(
+        info, scopes=[FCM_SCOPE]
+    ), info.get("project_id", "")
+
+
+def _access_token() -> tuple[str, str]:
+    creds, project_id = _credentials()
+    creds.refresh(Request())
+    return creds.token, project_id
+
+
+def get_org_agent_tokens(organization_id: str) -> list[str]:
+    """Tokens FCM des conseillers disponibles (owner + membres actifs)."""
+    supabase = get_supabase()
+
+    org = (
+        supabase.table("organizations")
+        .select("owner_id")
+        .eq("id", organization_id)
+        .maybe_single()
+        .execute()
+    )
+    if not org.data:
+        return []
+
+    user_ids: set[str] = {org.data["owner_id"]}
+
+    members = (
+        supabase.table("organization_members")
+        .select("user_id")
+        .eq("organization_id", organization_id)
+        .eq("is_available", True)
+        .execute()
+    )
+    for row in members.data or []:
+        user_ids.add(row["user_id"])
+
+    if not user_ids:
+        return []
+
+    tokens = (
+        supabase.table("agent_device_tokens")
+        .select("token")
+        .in_("user_id", list(user_ids))
+        .execute()
+    )
+    return list({row["token"] for row in (tokens.data or []) if row.get("token")})
+
+
+async def send_push_to_token(
+    token: str,
+    title: str,
+    body: str,
+    data: dict[str, Any] | None = None,
+) -> bool:
+    if not _firebase_enabled():
+        logger.debug("FCM disabled — no FIREBASE_SERVICE_ACCOUNT_JSON")
+        return False
+
+    try:
+        access_token, project_id = _access_token()
+    except Exception as exc:
+        logger.warning("FCM auth failed: %s", exc)
+        return False
+
+    if not project_id:
+        logger.warning("FCM: project_id missing in service account JSON")
+        return False
+
+    payload = {
+        "message": {
+            "token": token,
+            "notification": {"title": title, "body": body},
+            "data": {k: str(v) for k, v in (data or {}).items()},
+            "android": {"priority": "HIGH", "notification": {"channel_id": "handoff"}},
+            "apns": {"payload": {"aps": {"sound": "default", "badge": 1}}},
+        }
+    }
+
+    url = f"https://fcm.googleapis.com/v1/projects/{project_id}/messages:send"
+    async with httpx.AsyncClient(timeout=15) as client:
+        res = await client.post(
+            url,
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+        )
+        if res.status_code >= 400:
+            logger.warning("FCM send failed (%s): %s", res.status_code, res.text[:300])
+            return False
+        return True
+
+
+async def notify_org_handoff(
+    organization_id: str,
+    title: str,
+    body: str,
+    data: dict[str, Any],
+) -> int:
+    """Envoie une push à tous les conseillers disponibles. Retourne le nb de succès."""
+    tokens = get_org_agent_tokens(organization_id)
+    if not tokens:
+        logger.info("No FCM tokens for org %s", organization_id)
+        return 0
+
+    sent = 0
+    for token in tokens:
+        ok = await send_push_to_token(token, title, body, data)
+        if ok:
+            sent += 1
+    logger.info("FCM handoff: %s/%s sent for org %s", sent, len(tokens), organization_id)
+    return sent

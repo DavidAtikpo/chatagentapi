@@ -10,6 +10,7 @@ class Settings(BaseSettings):
 
     supabase_url: str = ""
     supabase_service_key: str = ""
+    supabase_jwt_secret: str = ""
 
     anthropic_api_key: str = ""
     claude_model: str = "claude-sonnet-4-6"
@@ -23,6 +24,9 @@ class Settings(BaseSettings):
 
     whatsapp_token: str = ""
     whatsapp_phone_number_id: str = ""
+
+    # Firebase Cloud Messaging — JSON complet du compte de service (une ligne)
+    firebase_service_account_json: str = ""
 
     widget_cdn_url: str = "https://cdn.example.com/widget.js"
     app_url: str = "http://localhost:3000"

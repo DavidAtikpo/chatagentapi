@@ -6,6 +6,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from app.services.chat import stream_chat
 from app.services.country_utils import COUNTRY_ALIASES, _country_key
+from app.services.handoff import get_conversation_handoff
 from app.services.plans import has_pro_features
 from app.services.supabase_client import get_supabase
 
@@ -156,6 +157,9 @@ async def chat(payload: ChatRequest, request: Request):
                 "event": "token",
                 "data": "Désolé, une erreur est survenue. Réessayez dans un instant.",
             }
+        hs = (get_conversation_handoff(conversation_id) or {}).get("handoff_status", "none")
+        if hs in ("requested", "active"):
+            yield {"event": "handoff", "data": hs}
         yield {"event": "done", "data": conversation_id}
 
     return EventSourceResponse(event_generator())
