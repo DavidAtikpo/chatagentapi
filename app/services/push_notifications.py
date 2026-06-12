@@ -33,8 +33,8 @@ def _access_token() -> tuple[str, str]:
     return creds.token, project_id
 
 
-def get_org_agent_tokens(organization_id: str) -> list[str]:
-    """Tokens FCM des conseillers disponibles (owner + membres actifs)."""
+def get_org_agent_tokens(organization_id: str, site_id: str | None = None) -> list[str]:
+    """Tokens FCM : propriétaire (tous sites) + conseillers du site concerné."""
     supabase = get_supabase()
 
     org = (
@@ -51,13 +51,23 @@ def get_org_agent_tokens(organization_id: str) -> list[str]:
 
     members = (
         supabase.table("organization_members")
-        .select("user_id")
+        .select("user_id, site_id, role")
         .eq("organization_id", organization_id)
         .eq("is_available", True)
         .execute()
     )
     for row in members.data or []:
-        user_ids.add(row["user_id"])
+        uid = row.get("user_id")
+        if not uid or uid == org.data["owner_id"]:
+            continue
+        member_site = row.get("site_id")
+        role = row.get("role") or "agent"
+        if role == "admin" or not member_site:
+            user_ids.add(uid)
+        elif site_id and member_site == site_id:
+            user_ids.add(uid)
+        elif not site_id:
+            user_ids.add(uid)
 
     if not user_ids:
         return []
@@ -122,9 +132,10 @@ async def notify_org_handoff(
     title: str,
     body: str,
     data: dict[str, Any],
+    site_id: str | None = None,
 ) -> int:
-    """Envoie une push à tous les conseillers disponibles. Retourne le nb de succès."""
-    tokens = get_org_agent_tokens(organization_id)
+    """Envoie une push aux conseillers concernés par le site. Retourne le nb de succès."""
+    tokens = get_org_agent_tokens(organization_id, site_id=site_id)
     if not tokens:
         logger.info("No FCM tokens for org %s", organization_id)
         return 0

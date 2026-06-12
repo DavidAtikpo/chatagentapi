@@ -41,6 +41,54 @@ async def get_current_agent(
     return _verify_agent_token(creds.credentials)
 
 
+def user_accessible_site_ids(user_id: str) -> list[str]:
+    """Sites visibles : propriétaire/admin (tous) ou conseiller (site assigné)."""
+    supabase = get_supabase()
+    site_ids: set[str] = set()
+
+    owned = (
+        supabase.table("organizations")
+        .select("id")
+        .eq("owner_id", user_id)
+        .execute()
+    )
+    owned_org_ids = [row["id"] for row in owned.data or []]
+    if owned_org_ids:
+        sites = (
+            supabase.table("sites")
+            .select("id")
+            .in_("organization_id", owned_org_ids)
+            .execute()
+        )
+        for row in sites.data or []:
+            site_ids.add(row["id"])
+
+    members = (
+        supabase.table("organization_members")
+        .select("organization_id, site_id, role")
+        .eq("user_id", user_id)
+        .execute()
+    )
+    for member in members.data or []:
+        org_id = member["organization_id"]
+        assigned_site = member.get("site_id")
+        role = member.get("role") or "agent"
+
+        if role in ("owner", "admin") or not assigned_site:
+            org_sites = (
+                supabase.table("sites")
+                .select("id")
+                .eq("organization_id", org_id)
+                .execute()
+            )
+            for row in org_sites.data or []:
+                site_ids.add(row["id"])
+        else:
+            site_ids.add(assigned_site)
+
+    return list(site_ids)
+
+
 def user_organization_ids(user_id: str) -> list[str]:
     """Organisations accessibles : propriétaire ou membre agent."""
     supabase = get_supabase()
@@ -90,7 +138,8 @@ def assert_agent_can_access_conversation(user_id: str, conversation_id: str) -> 
     if not conv.data:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
-    org_id = (conv.data.get("sites") or {}).get("organization_id")
-    if not org_id or org_id not in user_organization_ids(user_id):
+    conv_site_id = conv.data.get("site_id") or (conv.data.get("sites") or {}).get("id")
+    allowed_sites = user_accessible_site_ids(user_id)
+    if conv_site_id not in allowed_sites:
         raise HTTPException(status_code=403, detail="Access denied")
     return conv.data

@@ -401,6 +401,7 @@ async def stream_chat(
                 site_row.data["organization_id"],
                 handoff_reason,
                 site_row.data.get("name", "Chat"),
+                site_id=site_id,
             )
             if handoff_reason == "user_request" and "conseiller" not in clean_response.lower():
                 yield "\n\nJe vous mets en relation avec un conseiller humain. Un instant…"

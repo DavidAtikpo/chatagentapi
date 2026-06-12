@@ -10,7 +10,8 @@ from app.services.auth import (
     AgentUser,
     assert_agent_can_access_conversation,
     get_current_agent,
-    user_organization_ids,
+    is_organization_owner,
+    user_accessible_site_ids,
 )
 from app.services.handoff import claim_handoff, insert_human_message, release_handoff
 from app.services.owner_stats import fetch_owner_stats
@@ -41,19 +42,50 @@ async def owner_stats(agent: AgentUser = Depends(get_current_agent)):
     return data
 
 
+@router.get("/profile")
+async def agent_profile(agent: AgentUser = Depends(get_current_agent)):
+    """Profil agent : rôle, site assigné, accès stats."""
+    supabase = get_supabase()
+    is_owner = is_organization_owner(agent.user_id)
+
+    member = (
+        supabase.table("organization_members")
+        .select("role, site_id, display_name, sites(name)")
+        .eq("user_id", agent.user_id)
+        .limit(1)
+        .execute()
+    )
+    row = (member.data or [None])[0]
+    site_name = None
+    site_id = None
+    role = "owner" if is_owner else "agent"
+    if row:
+        role = row.get("role") or role
+        site_id = row.get("site_id")
+        sites = row.get("sites")
+        if isinstance(sites, dict):
+            site_name = sites.get("name")
+
+    site_ids = user_accessible_site_ids(agent.user_id)
+    return {
+        "email": agent.email,
+        "is_owner": is_owner,
+        "role": role,
+        "assigned_site_id": site_id,
+        "assigned_site_name": site_name,
+        "accessible_sites_count": len(site_ids),
+    }
+
+
 @router.get("/inbox")
 async def agent_inbox(agent: AgentUser = Depends(get_current_agent)):
-    org_ids = user_organization_ids(agent.user_id)
-    if not org_ids:
-        return {"pending": [], "active": []}
+    site_ids = user_accessible_site_ids(agent.user_id)
+    if not site_ids:
+        return {"pending": [], "active": [], "pool_active": []}
 
     supabase = get_supabase()
-    sites = supabase.table("sites").select("id, name").in_("organization_id", org_ids).execute()
-    site_ids = [s["id"] for s in (sites.data or [])]
+    sites = supabase.table("sites").select("id, name").in_("id", site_ids).execute()
     site_names = {s["id"]: s["name"] for s in (sites.data or [])}
-
-    if not site_ids:
-        return {"pending": [], "active": []}
 
     pending = (
         supabase.table("conversations")

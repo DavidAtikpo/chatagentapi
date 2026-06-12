@@ -60,6 +60,7 @@ def request_handoff(
     organization_id: str,
     reason: str,
     site_name: str = "Chat",
+    site_id: str | None = None,
 ) -> None:
     supabase = get_supabase()
     now = datetime.now(timezone.utc).isoformat()
@@ -107,6 +108,7 @@ def request_handoff(
                     "conversation_id": conversation_id,
                     "reason": reason,
                 },
+                site_id=site_id,
             )
         )
     except RuntimeError as exc:
