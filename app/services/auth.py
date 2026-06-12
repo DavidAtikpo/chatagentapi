@@ -3,11 +3,9 @@
 import logging
 from dataclasses import dataclass
 
-import jwt
 from fastapi import Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from app.config import settings
 from app.services.supabase_client import get_supabase
 
 logger = logging.getLogger(__name__)
@@ -20,19 +18,19 @@ class AgentUser:
     email: str | None
 
 
-def _decode_supabase_jwt(token: str) -> dict:
-    if not settings.supabase_jwt_secret:
-        raise HTTPException(status_code=503, detail="JWT secret not configured")
+def _verify_agent_token(token: str) -> AgentUser:
+    """Valide le token via Supabase Auth (utilise SUPABASE_SERVICE_KEY déjà configurée)."""
+    supabase = get_supabase()
     try:
-        return jwt.decode(
-            token,
-            settings.supabase_jwt_secret,
-            algorithms=["HS256"],
-            audience="authenticated",
-        )
-    except jwt.PyJWTError as exc:
-        logger.warning("Invalid JWT: %s", exc)
+        response = supabase.auth.get_user(token)
+    except Exception as exc:
+        logger.warning("Supabase get_user failed: %s", exc)
         raise HTTPException(status_code=401, detail="Invalid or expired token") from exc
+
+    user = getattr(response, "user", None)
+    if not user or not getattr(user, "id", None):
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    return AgentUser(user_id=str(user.id), email=getattr(user, "email", None))
 
 
 async def get_current_agent(
@@ -40,11 +38,7 @@ async def get_current_agent(
 ) -> AgentUser:
     if not creds or creds.scheme.lower() != "bearer":
         raise HTTPException(status_code=401, detail="Authorization required")
-    payload = _decode_supabase_jwt(creds.credentials)
-    sub = payload.get("sub")
-    if not sub:
-        raise HTTPException(status_code=401, detail="Invalid token payload")
-    return AgentUser(user_id=sub, email=payload.get("email"))
+    return _verify_agent_token(creds.credentials)
 
 
 def user_organization_ids(user_id: str) -> list[str]:
