@@ -64,6 +64,19 @@ def user_organization_ids(user_id: str) -> list[str]:
     return list(ids)
 
 
+def is_organization_owner(user_id: str) -> bool:
+    """Propriétaire du compte (client principal) — 1 org, N sites."""
+    supabase = get_supabase()
+    rows = (
+        supabase.table("organizations")
+        .select("id")
+        .eq("owner_id", user_id)
+        .limit(1)
+        .execute()
+    )
+    return bool(rows.data)
+
+
 def assert_agent_can_access_conversation(user_id: str, conversation_id: str) -> dict:
     """Retourne la conversation si l'agent y a accès, sinon 404."""
     supabase = get_supabase()

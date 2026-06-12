@@ -1,4 +1,4 @@
-"""Statistiques dashboard pour le propriétaire du compte (client principal)."""
+"""Statistiques dashboard — 1 organisation, tous les sites agrégés."""
 
 from collections import Counter
 
@@ -37,42 +37,48 @@ def _aggregate_countries(raw_countries: list[str]) -> list[dict]:
 
 
 def fetch_owner_stats(user_id: str) -> dict | None:
-    """Retourne les stats si user_id est propriétaire, sinon None."""
+    """Stats agrégées sur toute l'organisation et tous ses sites."""
     supabase = get_supabase()
-    org = (
+    orgs = (
         supabase.table("organizations")
         .select("id, name")
         .eq("owner_id", user_id)
-        .maybe_single()
         .execute()
     )
-    if not org.data:
+    if not orgs.data:
         return None
 
-    org_id = org.data["id"]
+    org_rows = orgs.data
+    org_ids = [o["id"] for o in org_rows]
+    org_name = org_rows[0]["name"]
+
     sites = (
         supabase.table("sites")
         .select("id, name")
-        .eq("organization_id", org_id)
+        .in_("organization_id", org_ids)
+        .order("name")
         .execute()
     )
     site_rows = sites.data or []
     site_ids = [s["id"] for s in site_rows]
 
+    site_summaries: list[dict] = []
     conv_count = 0
-    if site_ids:
-        conv = (
+    for site in site_rows:
+        site_conv = (
             supabase.table("conversations")
             .select("id", count="exact")
-            .in_("site_id", site_ids)
+            .eq("site_id", site["id"])
             .execute()
         )
-        conv_count = conv.count or 0
+        n = site_conv.count or 0
+        conv_count += n
+        site_summaries.append({"id": site["id"], "name": site["name"], "conversations": n})
 
     leads = (
         supabase.table("leads")
         .select("id", count="exact")
-        .eq("organization_id", org_id)
+        .in_("organization_id", org_ids)
         .execute()
     )
 
@@ -128,10 +134,11 @@ def fetch_owner_stats(user_id: str) -> dict | None:
                 countries_raw.append(c)
 
     return {
-        "organization_name": org.data.get("name"),
+        "organization_name": org_name,
         "conversations": conv_count,
         "leads": leads.count or 0,
         "tracked_links": tracked_links,
         "countries": _aggregate_countries(countries_raw),
         "sites_count": len(site_ids),
+        "sites": site_summaries,
     }
