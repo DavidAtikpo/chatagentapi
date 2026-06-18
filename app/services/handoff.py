@@ -1,13 +1,11 @@
 """Human Handoff — détection, notification agents, gestion d'état."""
 
-import asyncio
 import logging
 import re
 from datetime import datetime, timezone
 
 from postgrest.exceptions import APIError
 
-from app.services.push_notifications import notify_org_handoff
 from app.services.supabase_client import get_supabase
 
 logger = logging.getLogger(__name__)
@@ -61,7 +59,7 @@ def request_handoff(
     reason: str,
     site_name: str = "Chat",
     site_id: str | None = None,
-) -> None:
+) -> dict | None:
     supabase = get_supabase()
     now = datetime.now(timezone.utc).isoformat()
 
@@ -96,23 +94,14 @@ def request_handoff(
 
     logger.info("Handoff requested conv=%s reason=%s", conversation_id, reason)
 
-    # Push Firebase (fire-and-forget depuis le flux async chat)
-    try:
-        asyncio.create_task(
-            notify_org_handoff(
-                organization_id,
-                title=f"🙋 {label}",
-                body=f"Conversation sur {site_name} — ouvrez l'app conseiller",
-                data={
-                    "type": "handoff_request",
-                    "conversation_id": conversation_id,
-                    "reason": reason,
-                },
-                site_id=site_id,
-            )
-        )
-    except RuntimeError as exc:
-        logger.warning("FCM handoff notify skipped: %s", exc)
+    return {
+        "organization_id": organization_id,
+        "site_id": site_id,
+        "conversation_id": conversation_id,
+        "reason": reason,
+        "title": f"🙋 {label}",
+        "body": f"Conversation sur {site_name} — ouvrez l'app conseiller",
+    }
 
 
 def claim_handoff(conversation_id: str, agent_user_id: str) -> dict:

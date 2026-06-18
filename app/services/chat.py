@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import re
 
 from anthropic import AsyncAnthropic
@@ -22,7 +23,10 @@ from app.services.handoff import (
     is_handoff_active,
     request_handoff,
 )
+from app.services.push_notifications import notify_org_handoff
 from app.services.supabase_client import get_supabase
+
+logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = """Tu es l'assistant du site web « {site_name} ».
 
@@ -397,12 +401,27 @@ async def stream_chat(
             .execute()
         )
         if site_row.data:
-            request_handoff(
+            push_payload = request_handoff(
                 conversation_id,
                 site_row.data["organization_id"],
                 handoff_reason,
                 site_row.data.get("name", "Chat"),
                 site_id=site_id,
             )
+            if push_payload:
+                try:
+                    await notify_org_handoff(
+                        push_payload["organization_id"],
+                        title=push_payload["title"],
+                        body=push_payload["body"],
+                        data={
+                            "type": "handoff_request",
+                            "conversation_id": push_payload["conversation_id"],
+                            "reason": push_payload["reason"],
+                        },
+                        site_id=push_payload.get("site_id"),
+                    )
+                except Exception as exc:
+                    logger.warning("FCM handoff notify failed: %s", exc)
             if handoff_reason == "user_request" and "conseiller" not in clean_response.lower():
                 yield "\n\nJe vous mets en relation avec un conseiller humain. Un instant…"
