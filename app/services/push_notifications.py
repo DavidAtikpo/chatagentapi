@@ -19,7 +19,7 @@ FCM_SCOPE = "https://www.googleapis.com/auth/firebase.messaging"
 
 
 def _firebase_enabled() -> bool:
-    return bool(settings.firebase_service_account_json.strip())
+    return settings.firebase_enabled
 
 
 def _credentials():

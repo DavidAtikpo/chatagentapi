@@ -1,6 +1,8 @@
 .env
 .env.local
 .env.*.local
+firebase-service-account.json
+secrets/
 __pycache__/
 *.py[cod]
 *.egg-info/
