@@ -19,9 +19,11 @@ from app.services.handoff import (
     detect_handoff_reason,
     extract_handoff_marker,
     get_conversation_handoff,
+    handoff_blocks_ai,
     insert_user_message_only,
     is_handoff_active,
     request_handoff,
+    schedule_handoff_reassurance,
 )
 from app.services.push_notifications import notify_org_handoff
 from app.services.supabase_client import get_supabase
@@ -224,8 +226,8 @@ async def stream_chat(
     ip_country: str | None = None,
 ):
     handoff = get_conversation_handoff(conversation_id)
-    if handoff and is_handoff_active(handoff.get("handoff_status")):
-        # Enregistre le message visiteur — pas de réponse auto (le conseiller répond via l'app)
+    if handoff and handoff_blocks_ai(handoff):
+        # Conseiller actif, ou attente initiale — pas de réponse IA automatique
         insert_user_message_only(conversation_id, user_message)
         return
 
@@ -423,5 +425,8 @@ async def stream_chat(
                     )
                 except Exception as exc:
                     logger.warning("FCM handoff notify failed: %s", exc)
+                asyncio.create_task(
+                    schedule_handoff_reassurance(conversation_id)
+                )
             if handoff_reason == "user_request" and "conseiller" not in clean_response.lower():
                 yield "\n\nJe vous mets en relation avec un conseiller humain. Un instant…"

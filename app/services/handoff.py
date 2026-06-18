@@ -1,5 +1,6 @@
 """Human Handoff — détection, notification agents, gestion d'état."""
 
+import asyncio
 import logging
 import re
 from datetime import datetime, timezone
@@ -9,6 +10,8 @@ from postgrest.exceptions import APIError
 from app.services.supabase_client import get_supabase
 
 logger = logging.getLogger(__name__)
+
+HANDOFF_REASSURANCE_DELAY_SECONDS = 45
 
 HUMAN_REQUEST_RE = re.compile(
     r"(parler\s+(à|a)\s+(un\s+)?(humain|conseiller|personne|réel|vraie\s+personne)"
@@ -41,7 +44,10 @@ def get_conversation_handoff(conversation_id: str) -> dict | None:
     supabase = get_supabase()
     result = (
         supabase.table("conversations")
-        .select("id, handoff_status, assigned_agent_id, handoff_reason, site_id, lead_score")
+        .select(
+            "id, handoff_status, assigned_agent_id, handoff_reason, "
+            "site_id, lead_score, handoff_reassured_at"
+        )
         .eq("id", conversation_id)
         .maybe_single()
         .execute()
@@ -51,6 +57,85 @@ def get_conversation_handoff(conversation_id: str) -> dict | None:
 
 def is_handoff_active(status: str | None) -> bool:
     return status in ("requested", "active")
+
+
+def handoff_blocks_ai(handoff: dict | None) -> bool:
+    """Bloque l'IA seulement si conseiller actif, ou attente sans message de patience."""
+    if not handoff:
+        return False
+    status = handoff.get("handoff_status")
+    if status == "active":
+        return True
+    if status == "requested" and not handoff.get("handoff_reassured_at"):
+        return True
+    return False
+
+
+def _reassurance_message(site_name: str) -> str:
+    label = site_name or "notre équipe"
+    return (
+        f"Merci pour votre patience ! 😊\n\n"
+        f"Un conseiller de {label} va vous rejoindre très bientôt — "
+        f"il a été prévenu et prendra le relais dès qu'il sera disponible.\n\n"
+        f"En attendant, **je reste avec vous** : posez-moi vos questions, "
+        f"je continue de vous aider du mieux que je peux."
+    )
+
+
+def _agent_intro_message(display_name: str | None, site_name: str) -> str:
+    name = (display_name or "").strip() or "votre conseiller"
+    site = (site_name or "").strip() or "notre équipe"
+    return (
+        f"Bonjour ! 👋\n\n"
+        f"Je suis **{name}**, conseiller·ère pour **{site}**. "
+        f"Je prends le relais avec plaisir — dites-moi comment je peux vous aider, "
+        f"je suis là pour vous accompagner."
+    )
+
+
+async def schedule_handoff_reassurance(conversation_id: str) -> None:
+    """Si personne ne claim après un délai, l'IA rassure le visiteur et reprend la parole."""
+    await asyncio.sleep(HANDOFF_REASSURANCE_DELAY_SECONDS)
+    supabase = get_supabase()
+    conv = (
+        supabase.table("conversations")
+        .select("handoff_status, handoff_reassured_at, site_id")
+        .eq("id", conversation_id)
+        .maybe_single()
+        .execute()
+    )
+    if not conv.data:
+        return
+    if conv.data.get("handoff_status") != "requested":
+        return
+    if conv.data.get("handoff_reassured_at"):
+        return
+
+    site_name = "notre équipe"
+    site_id = conv.data.get("site_id")
+    if site_id:
+        site_row = (
+            supabase.table("sites")
+            .select("name")
+            .eq("id", site_id)
+            .maybe_single()
+            .execute()
+        )
+        if site_row.data:
+            site_name = site_row.data.get("name") or site_name
+
+    now = datetime.now(timezone.utc).isoformat()
+    supabase.table("messages").insert(
+        {
+            "conversation_id": conversation_id,
+            "role": "assistant",
+            "content": _reassurance_message(site_name),
+        }
+    ).execute()
+    supabase.table("conversations").update(
+        {"handoff_reassured_at": now, "updated_at": now}
+    ).eq("id", conversation_id).execute()
+    logger.info("Handoff reassurance sent conv=%s", conversation_id)
 
 
 def request_handoff(
@@ -68,6 +153,7 @@ def request_handoff(
             "handoff_status": "requested",
             "handoff_reason": reason,
             "handoff_requested_at": now,
+            "handoff_reassured_at": None,
             "status": "handed_off",
         }
     ).eq("id", conversation_id).execute()
@@ -108,7 +194,7 @@ def claim_handoff(conversation_id: str, agent_user_id: str) -> dict:
     supabase = get_supabase()
     conv = (
         supabase.table("conversations")
-        .select("handoff_status, assigned_agent_id")
+        .select("handoff_status, assigned_agent_id, site_id")
         .eq("id", conversation_id)
         .maybe_single()
         .execute()
@@ -124,10 +210,37 @@ def claim_handoff(conversation_id: str, agent_user_id: str) -> dict:
     if assigned and assigned != agent_user_id:
         raise ValueError("Already assigned to another agent")
 
+    site_name = "notre équipe"
+    display_name: str | None = None
+    site_id = conv.data.get("site_id")
+    if site_id:
+        site_row = (
+            supabase.table("sites")
+            .select("name, organization_id")
+            .eq("id", site_id)
+            .maybe_single()
+            .execute()
+        )
+        if site_row.data:
+            site_name = site_row.data.get("name") or site_name
+            org_id = site_row.data.get("organization_id")
+            if org_id:
+                member = (
+                    supabase.table("organization_members")
+                    .select("display_name")
+                    .eq("organization_id", org_id)
+                    .eq("user_id", agent_user_id)
+                    .maybe_single()
+                    .execute()
+                )
+                if member.data:
+                    display_name = member.data.get("display_name")
+
     supabase.table("conversations").update(
         {
             "handoff_status": "active",
             "assigned_agent_id": agent_user_id,
+            "handoff_reassured_at": None,
             "status": "handed_off",
         }
     ).eq("id", conversation_id).execute()
@@ -135,8 +248,8 @@ def claim_handoff(conversation_id: str, agent_user_id: str) -> dict:
     supabase.table("messages").insert(
         {
             "conversation_id": conversation_id,
-            "role": "assistant",
-            "content": "Un conseiller a rejoint la conversation. Comment puis-je vous aider ?",
+            "role": "human",
+            "content": _agent_intro_message(display_name, site_name),
         }
     ).execute()
 

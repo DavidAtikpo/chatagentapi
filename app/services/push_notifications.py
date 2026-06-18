@@ -123,8 +123,25 @@ async def send_push_to_token(
             "token": token,
             "notification": {"title": title, "body": body},
             "data": {k: str(v) for k, v in (data or {}).items()},
-            "android": {"priority": "HIGH", "notification": {"channel_id": "handoff"}},
-            "apns": {"payload": {"aps": {"sound": "default", "badge": 1}}},
+            "android": {
+                "priority": "HIGH",
+                "notification": {
+                    "channel_id": "handoff_urgent",
+                    "sound": "default",
+                    "default_vibrate_timings": True,
+                    "notification_priority": "PRIORITY_MAX",
+                    "visibility": "PUBLIC",
+                },
+            },
+            "apns": {
+                "payload": {
+                    "aps": {
+                        "sound": "default",
+                        "badge": 1,
+                        "interruption-level": "time-sensitive",
+                    }
+                }
+            },
         }
     }
 

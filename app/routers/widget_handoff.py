@@ -14,6 +14,7 @@ class HandoffStatusResponse(BaseModel):
     conversation_id: str
     handoff_status: str
     assigned: bool
+    reassured: bool = False
 
 
 def _verify_widget_conversation(widget_key: str, conversation_id: str) -> dict:
@@ -30,7 +31,7 @@ def _verify_widget_conversation(widget_key: str, conversation_id: str) -> dict:
 
     conv = (
         supabase.table("conversations")
-        .select("id, site_id, handoff_status, assigned_agent_id")
+        .select("id, site_id, handoff_status, assigned_agent_id, handoff_reassured_at")
         .eq("id", conversation_id)
         .maybe_single()
         .execute()
@@ -48,6 +49,7 @@ async def conversation_handoff_status(conversation_id: str, widget_key: str = Qu
         conversation_id=conversation_id,
         handoff_status=status,
         assigned=status == "active",
+        reassured=bool(conv.get("handoff_reassured_at")),
     )
 
 
