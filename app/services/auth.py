@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 from fastapi import Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from postgrest.exceptions import APIError
 
 from app.services.supabase_client import get_supabase
 
@@ -41,6 +42,33 @@ async def get_current_agent(
     return _verify_agent_token(creds.credentials)
 
 
+def _member_rows_for_user(user_id: str) -> list[dict]:
+    """Membres org — compatible si migration 012 (site_id) pas encore appliquée."""
+    supabase = get_supabase()
+    try:
+        result = (
+            supabase.table("organization_members")
+            .select("organization_id, site_id, role")
+            .eq("user_id", user_id)
+            .execute()
+        )
+        return result.data or []
+    except APIError as exc:
+        msg = str(exc).lower()
+        if "site_id" not in msg and "42703" not in msg:
+            raise
+        result = (
+            supabase.table("organization_members")
+            .select("organization_id, role")
+            .eq("user_id", user_id)
+            .execute()
+        )
+        rows = result.data or []
+        for row in rows:
+            row["site_id"] = None
+        return rows
+
+
 def user_accessible_site_ids(user_id: str) -> list[str]:
     """Sites visibles : propriétaire/admin (tous) ou conseiller (site assigné)."""
     supabase = get_supabase()
@@ -63,13 +91,7 @@ def user_accessible_site_ids(user_id: str) -> list[str]:
         for row in sites.data or []:
             site_ids.add(row["id"])
 
-    members = (
-        supabase.table("organization_members")
-        .select("organization_id, site_id, role")
-        .eq("user_id", user_id)
-        .execute()
-    )
-    for member in members.data or []:
+    for member in _member_rows_for_user(user_id):
         org_id = member["organization_id"]
         assigned_site = member.get("site_id")
         role = member.get("role") or "agent"

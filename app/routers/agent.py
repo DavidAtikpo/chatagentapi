@@ -12,6 +12,8 @@ from app.services.auth import (
     get_current_agent,
     is_organization_owner,
     user_accessible_site_ids,
+    user_organization_ids,
+    _member_rows_for_user,
 )
 from app.services.handoff import claim_handoff, insert_human_message, release_handoff
 from app.services.owner_stats import fetch_owner_stats
@@ -48,23 +50,24 @@ async def agent_profile(agent: AgentUser = Depends(get_current_agent)):
     supabase = get_supabase()
     is_owner = is_organization_owner(agent.user_id)
 
-    member = (
-        supabase.table("organization_members")
-        .select("role, site_id, display_name, sites(name)")
-        .eq("user_id", agent.user_id)
-        .limit(1)
-        .execute()
-    )
-    row = (member.data or [None])[0]
+    rows = _member_rows_for_user(agent.user_id)
+    row = rows[0] if rows else None
     site_name = None
     site_id = None
     role = "owner" if is_owner else "agent"
     if row:
         role = row.get("role") or role
         site_id = row.get("site_id")
-        sites = row.get("sites")
-        if isinstance(sites, dict):
-            site_name = sites.get("name")
+        if site_id:
+            site_row = (
+                supabase.table("sites")
+                .select("name")
+                .eq("id", site_id)
+                .maybe_single()
+                .execute()
+            )
+            if site_row.data:
+                site_name = site_row.data.get("name")
 
     site_ids = user_accessible_site_ids(agent.user_id)
     return {

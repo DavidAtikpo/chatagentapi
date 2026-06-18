@@ -8,6 +8,8 @@ import httpx
 from google.auth.transport.requests import Request
 from google.oauth2 import service_account
 
+from postgrest.exceptions import APIError
+
 from app.config import settings
 from app.services.supabase_client import get_supabase
 
@@ -49,14 +51,29 @@ def get_org_agent_tokens(organization_id: str, site_id: str | None = None) -> li
 
     user_ids: set[str] = {org.data["owner_id"]}
 
-    members = (
-        supabase.table("organization_members")
-        .select("user_id, site_id, role")
-        .eq("organization_id", organization_id)
-        .eq("is_available", True)
-        .execute()
-    )
-    for row in members.data or []:
+    try:
+        members = (
+            supabase.table("organization_members")
+            .select("user_id, site_id, role")
+            .eq("organization_id", organization_id)
+            .eq("is_available", True)
+            .execute()
+        )
+        member_rows = members.data or []
+    except APIError as exc:
+        msg = str(exc).lower()
+        if "site_id" not in msg and "42703" not in msg:
+            raise
+        members = (
+            supabase.table("organization_members")
+            .select("user_id, role")
+            .eq("organization_id", organization_id)
+            .eq("is_available", True)
+            .execute()
+        )
+        member_rows = [{**r, "site_id": None} for r in (members.data or [])]
+
+    for row in member_rows:
         uid = row.get("user_id")
         if not uid or uid == org.data["owner_id"]:
             continue

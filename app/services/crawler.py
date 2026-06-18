@@ -16,6 +16,10 @@ from app.services.text_quality import is_html_content_type, is_readable_text, sh
 
 logger = logging.getLogger(__name__)
 
+# Sites lents (WordPress, hébergeurs mutualisés) : délai généreux par page.
+CRAWL_TIMEOUT = httpx.Timeout(60.0, connect=20.0)
+CRAWL_HEADERS = {"User-Agent": "ChatbotSaaS-Crawler/1.0", "Accept": "text/html,application/xhtml+xml"}
+
 
 def _normalize_url(base: str, href: str) -> str | None:
     if not href or href.startswith(("#", "mailto:", "tel:", "javascript:")):
@@ -136,15 +140,22 @@ async def crawl_site(site_id: str, start_url: str, max_pages: int = 30) -> dict:
     site_image_url: str | None = None
 
     try:
-        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+        async with httpx.AsyncClient(timeout=CRAWL_TIMEOUT, follow_redirects=True) as client:
             while queue and pages_crawled < max_pages:
                 url = queue.pop(0)
                 if url in visited or should_skip_crawl_url(url):
                     continue
                 visited.add(url)
 
-                response = await client.get(url, headers={"User-Agent": "ChatbotSaaS-Crawler/1.0"})
+                try:
+                    response = await client.get(url, headers=CRAWL_HEADERS)
+                except (httpx.TimeoutException, httpx.RequestError) as exc:
+                    detail = str(exc) or type(exc).__name__
+                    logger.warning("  Page ignorée (réseau) : %s — %s", url, detail)
+                    continue
+
                 if response.status_code >= 400:
+                    logger.warning("  Page ignorée (HTTP %s) : %s", response.status_code, url)
                     continue
 
                 content_type = response.headers.get("content-type", "")
@@ -197,9 +208,7 @@ async def crawl_site(site_id: str, start_url: str, max_pages: int = 30) -> dict:
                 if formation_url in visited:
                     continue
                 try:
-                    response = await client.get(
-                        formation_url, headers={"User-Agent": "ChatbotSaaS-Crawler/1.0"}
-                    )
+                    response = await client.get(formation_url, headers=CRAWL_HEADERS)
                     if response.status_code < 400 and is_html_content_type(
                         response.headers.get("content-type", "")
                     ):
@@ -215,6 +224,15 @@ async def crawl_site(site_id: str, start_url: str, max_pages: int = 30) -> dict:
 
         sessions = dedupe_sessions(all_sessions)
         logger.info("  Total sessions extraites : %s", len(sessions))
+
+        if pages_crawled == 0:
+            msg = (
+                f"Aucune page lue pour {start_url} — vérifiez l'URL du site "
+                "(ex. https://cides.tf, pas un site tiers comme odoo.com) ou réessayez plus tard"
+            )
+            fail_progress(site_id, msg)
+            supabase.table("sites").update({"crawl_status": "failed"}).eq("id", site_id).execute()
+            raise RuntimeError(msg)
 
         return {
             "site_id": site_id,
