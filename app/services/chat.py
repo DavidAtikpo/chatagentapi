@@ -195,26 +195,29 @@ class _StreamSanitizer:
         self._qual_done = False
 
     def feed(self, chunk: str) -> str:
-        if not chunk:
+        if not chunk or self._qual_done:
             return ""
+
         self._buffer += chunk
 
-        if not self._qual_done and self._QUAL_MARKER in self._buffer:
-            self._buffer = self._buffer.split(self._QUAL_MARKER, 1)[0]
+        if self._QUAL_MARKER in self._buffer:
+            visible = self._buffer.split(self._QUAL_MARKER, 1)[0]
+            self._buffer = ""
             self._qual_done = True
+            visible = self._HANDOFF_RE.sub("", visible)
+            if "<!--HANDOFF:" in visible:
+                visible = visible.split("<!--HANDOFF:", 1)[0]
+            return visible
 
-        if not self._qual_done:
-            hold = 0
-            for i in range(1, len(self._QUAL_MARKER)):
-                if self._buffer.endswith(self._QUAL_MARKER[:i]):
-                    hold = i
-                    break
-            if hold:
-                visible = self._buffer[:-hold]
-                self._buffer = self._buffer[-hold:]
-            else:
-                visible = self._buffer
-                self._buffer = ""
+        hold = 0
+        for i in range(1, len(self._QUAL_MARKER)):
+            if self._buffer.endswith(self._QUAL_MARKER[:i]):
+                hold = i
+                break
+
+        if hold:
+            visible = self._buffer[:-hold]
+            self._buffer = self._buffer[-hold:]
         else:
             visible = self._buffer
             self._buffer = ""
