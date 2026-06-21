@@ -49,7 +49,7 @@ Objectifs :
 3. Qualifier le prospect (besoin, disponibilité, budget) quand c'est pertinent
 4. Proposer le lien d'achat/inscription/contact au bon moment
 5. Si le visiteur veut contacter l'équipe, oriente-le vers les boutons WhatsApp / Appel / Email (voir contacts ci-dessous)
-6. Handoff humain : si le visiteur demande un conseiller/humain, si tu ne peux pas répondre avec le contexte, ou si le lead est très chaud, ajoute après le bloc qualification : <!--HANDOFF:user_request--> ou <!--HANDOFF:ai_escalation--> ou <!--HANDOFF:hot_lead-->
+6. Handoff humain : UNIQUEMENT si le visiteur demande explicitement un conseiller/humain, si tu ne peux pas répondre avec le contexte, ou si le lead est très chaud. Ne jamais ajouter de marqueur handoff pour une simple salutation (bonjour, hello, bonsoir). Marqueurs (invisibles, fin de réponse) : <!--HANDOFF:user_request--> ou <!--HANDOFF:ai_escalation--> ou <!--HANDOFF:hot_lead-->
 
 Règles :
 - Langue par défaut du site : {language_label}
@@ -184,37 +184,44 @@ def _format_context_chunk(chunk: dict) -> str:
     return f"[{chunk.get('title', 'Source')}]({chunk.get('source_url', '')})\n{content}"
 
 
-class _QualificationStreamFilter:
-    """Hide the qualification block from streamed tokens shown to the visitor."""
+class _StreamSanitizer:
+    """Masque les blocs internes (qualification, handoff) pendant le streaming."""
 
-    _MARKER = "<!--QUALIFICATION:"
+    _QUAL_MARKER = "<!--QUALIFICATION:"
+    _HANDOFF_RE = re.compile(r"<!--HANDOFF:[a-z_]+-->")
 
     def __init__(self) -> None:
         self._buffer = ""
-        self._done = False
+        self._qual_done = False
 
     def feed(self, chunk: str) -> str:
-        if self._done or not chunk:
+        if not chunk:
             return ""
         self._buffer += chunk
-        if self._MARKER in self._buffer:
-            visible = self._buffer.split(self._MARKER, 1)[0]
-            self._done = True
-            return visible
 
-        hold = 0
-        for i in range(1, len(self._MARKER)):
-            if self._buffer.endswith(self._MARKER[:i]):
-                hold = i
-                break
+        if not self._qual_done and self._QUAL_MARKER in self._buffer:
+            self._buffer = self._buffer.split(self._QUAL_MARKER, 1)[0]
+            self._qual_done = True
 
-        if hold:
-            visible = self._buffer[:-hold]
-            self._buffer = self._buffer[-hold:]
+        if not self._qual_done:
+            hold = 0
+            for i in range(1, len(self._QUAL_MARKER)):
+                if self._buffer.endswith(self._QUAL_MARKER[:i]):
+                    hold = i
+                    break
+            if hold:
+                visible = self._buffer[:-hold]
+                self._buffer = self._buffer[-hold:]
+            else:
+                visible = self._buffer
+                self._buffer = ""
         else:
             visible = self._buffer
             self._buffer = ""
 
+        visible = self._HANDOFF_RE.sub("", visible)
+        if "<!--HANDOFF:" in visible:
+            visible = visible.split("<!--HANDOFF:", 1)[0]
         return visible
 
 
@@ -307,7 +314,7 @@ async def stream_chat(
 
     client = AsyncAnthropic(api_key=settings.anthropic_api_key)
     full_response = ""
-    stream_filter = _QualificationStreamFilter()
+    stream_filter = _StreamSanitizer()
 
     async with client.messages.stream(
         model=settings.claude_model,
@@ -393,7 +400,11 @@ async def stream_chat(
             ).execute()
 
     lead_score = (qualification or {}).get("score", 0) if qualification else 0
-    handoff_reason = handoff_marker or detect_handoff_reason(user_message, lead_score)
+    detected_reason = detect_handoff_reason(user_message, lead_score)
+    # Ignorer <!--HANDOFF:user_request--> si le visiteur n'a pas demandé un humain (ex. bonjour).
+    handoff_reason = detected_reason
+    if not handoff_reason and handoff_marker in ("ai_escalation", "hot_lead"):
+        handoff_reason = handoff_marker
     if handoff_reason and not is_handoff_active((handoff or {}).get("handoff_status")):
         site_row = (
             supabase.table("sites")
