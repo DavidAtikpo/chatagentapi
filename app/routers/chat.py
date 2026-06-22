@@ -106,19 +106,6 @@ async def chat(payload: ChatRequest, request: Request):
         )
         if link.data:
             traffic_link_id = link.data[0]["id"]
-            current = (
-                supabase.table("traffic_links")
-                .select("click_count")
-                .eq("id", traffic_link_id)
-                .single()
-                .execute()
-            )
-            if current.data:
-                supabase.table("traffic_links").update(
-                    {"click_count": (current.data.get("click_count") or 0) + 1}
-                ).eq("id", traffic_link_id).execute()
-
-    conversation_id = payload.conversation_id
     if not conversation_id:
         new_conv: dict = {
             "site_id": site_id,

@@ -11,6 +11,7 @@ from app.services.session_dates import filter_upcoming_sessions
 from app.services.session_store import ensure_training_sessions
 from app.services.site_summary import DEFAULT_WELCOME, ensure_welcome_intro
 from app.services.welcome_compose import compose_welcome_message
+from app.services.traffic_links import increment_traffic_link_click
 from app.services.supabase_client import get_supabase
 
 logger = logging.getLogger(__name__)
@@ -257,6 +258,8 @@ async def track_widget_event(payload: WidgetEventRequest):
             .execute()
         )
         if link.data:
+            if payload.event_type == "open":
+                increment_traffic_link_click(site_id, payload.traffic_slug)
             config = _increment_tracked_link_stats(config, payload.traffic_slug, payload.event_type)
 
     supabase.table("sites").update({"agent_config": config}).eq("id", site_id).execute()
