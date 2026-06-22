@@ -98,17 +98,6 @@ def handoff_blocks_ai(handoff: dict | None) -> bool:
     return False
 
 
-def _reassurance_message(site_name: str) -> str:
-    label = site_name or "notre équipe"
-    return (
-        f"Merci pour votre patience ! 😊\n\n"
-        f"Un conseiller de {label} va vous rejoindre très bientôt — "
-        f"il a été prévenu et prendra le relais dès qu'il sera disponible.\n\n"
-        f"En attendant, **je reste avec vous** : posez-moi vos questions, "
-        f"je continue de vous aider du mieux que je peux."
-    )
-
-
 def _agent_intro_message(display_name: str | None, site_name: str) -> str:
     name = (display_name or "").strip() or "votre conseiller"
     site = (site_name or "").strip() or "notre équipe"
@@ -121,12 +110,12 @@ def _agent_intro_message(display_name: str | None, site_name: str) -> str:
 
 
 async def schedule_handoff_reassurance(conversation_id: str) -> None:
-    """Si personne ne claim après un délai, l'IA rassure le visiteur et reprend la parole."""
+    """Après un délai sans claim : active le bandeau header widget (handoff_reassured_at)."""
     await asyncio.sleep(HANDOFF_REASSURANCE_DELAY_SECONDS)
     supabase = get_supabase()
     conv = (
         supabase.table("conversations")
-        .select("handoff_status, handoff_reassured_at, site_id")
+        .select("handoff_status, handoff_reassured_at")
         .eq("id", conversation_id)
         .maybe_single()
         .execute()
@@ -138,31 +127,11 @@ async def schedule_handoff_reassurance(conversation_id: str) -> None:
     if conv.data.get("handoff_reassured_at"):
         return
 
-    site_name = "notre équipe"
-    site_id = conv.data.get("site_id")
-    if site_id:
-        site_row = (
-            supabase.table("sites")
-            .select("name")
-            .eq("id", site_id)
-            .maybe_single()
-            .execute()
-        )
-        if site_row.data:
-            site_name = site_row.data.get("name") or site_name
-
     now = datetime.now(timezone.utc).isoformat()
-    supabase.table("messages").insert(
-        {
-            "conversation_id": conversation_id,
-            "role": "assistant",
-            "content": _reassurance_message(site_name),
-        }
-    ).execute()
     supabase.table("conversations").update(
         {"handoff_reassured_at": now, "updated_at": now}
     ).eq("id", conversation_id).execute()
-    logger.info("Handoff reassurance sent conv=%s", conversation_id)
+    logger.info("Handoff reassurance (header) conv=%s", conversation_id)
 
 
 def request_handoff(
@@ -302,9 +271,8 @@ def release_handoff(conversation_id: str) -> None:
     ).execute()
 
 
-def insert_human_message(conversation_id: str, content: str, agent_name: str | None = None) -> dict:
+def insert_human_message(conversation_id: str, content: str) -> dict:
     supabase = get_supabase()
-    prefix = f"**{agent_name}** : " if agent_name else ""
     try:
         row = (
             supabase.table("messages")
@@ -312,7 +280,7 @@ def insert_human_message(conversation_id: str, content: str, agent_name: str | N
                 {
                     "conversation_id": conversation_id,
                     "role": "human",
-                    "content": prefix + content if prefix else content,
+                    "content": content,
                 }
             )
             .execute()

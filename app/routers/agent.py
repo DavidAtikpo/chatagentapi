@@ -171,18 +171,8 @@ async def send_agent_message(
     if conv.get("assigned_agent_id") != agent.user_id:
         raise HTTPException(status_code=403, detail="Assigned to another agent")
 
-    supabase = get_supabase()
-    member = (
-        supabase.table("organization_members")
-        .select("display_name")
-        .eq("user_id", agent.user_id)
-        .limit(1)
-        .execute()
-    )
-    name = (member.data[0]["display_name"] if member.data else None) or "Conseiller"
-
     try:
-        msg = insert_human_message(conversation_id, payload.content.strip(), name)
+        msg = insert_human_message(conversation_id, payload.content.strip())
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:

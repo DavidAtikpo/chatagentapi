@@ -179,7 +179,7 @@ async def get_widget_config(widget_key: str):
     )
 
 
-VALID_EVENT_TYPES = {"whatsapp", "phone", "email", "signup", "link", "session"}
+VALID_EVENT_TYPES = {"whatsapp", "phone", "email", "signup", "link", "session", "open"}
 VALID_PLACEMENTS = {"dock", "assistant", "sessions_bar"}
 
 
@@ -227,9 +227,22 @@ async def track_widget_event(payload: WidgetEventRequest):
     site_id = site.data["id"]
     config = dict(site.data.get("agent_config") or {})
 
-    stats = dict(config.get("widget_click_stats") or {})
-    stats[payload.event_type] = int(stats.get(payload.event_type) or 0) + 1
-    config["widget_click_stats"] = stats
+    is_embed = not payload.traffic_slug
+
+    if is_embed:
+        embed = dict(config.get("embed_widget_stats") or {})
+        if payload.event_type == "open":
+            embed["opens"] = int(embed.get("opens") or 0) + 1
+        else:
+            clicks = dict(embed.get("clicks") or {})
+            clicks[payload.event_type] = int(clicks.get(payload.event_type) or 0) + 1
+            embed["clicks"] = clicks
+        config["embed_widget_stats"] = embed
+
+        stats = dict(config.get("widget_click_stats") or {})
+        if payload.event_type != "open":
+            stats[payload.event_type] = int(stats.get(payload.event_type) or 0) + 1
+            config["widget_click_stats"] = stats
 
     if payload.traffic_slug:
         link = (
