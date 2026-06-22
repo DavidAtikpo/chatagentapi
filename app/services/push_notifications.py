@@ -105,7 +105,7 @@ async def send_push_to_token(
     data: dict[str, Any] | None = None,
 ) -> bool:
     if not _firebase_enabled():
-        logger.debug("FCM disabled — no FIREBASE_SERVICE_ACCOUNT_JSON")
+        logger.info("FCM disabled — set FIREBASE_SERVICE_ACCOUNT_JSON on Render")
         return False
 
     try:

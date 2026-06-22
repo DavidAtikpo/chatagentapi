@@ -16,12 +16,10 @@ from app.services.plans import has_pro_features
 from app.services.rag import get_site_overview, search_knowledge
 from app.services.session_dates import filter_upcoming_sessions
 from app.services.handoff import (
-    detect_handoff_reason,
     extract_handoff_marker,
     get_conversation_handoff,
     handoff_blocks_ai,
     insert_user_message_only,
-    is_handoff_active,
     request_handoff,
     resolve_handoff_reason,
     schedule_handoff_reassurance,
@@ -229,6 +227,67 @@ class _StreamSanitizer:
         return visible
 
 
+async def _process_handoff_request(
+    conversation_id: str,
+    site_id: str,
+    user_message: str,
+    handoff_marker: str | None,
+    lead_score: int,
+    current_handoff: dict | None,
+) -> bool:
+    """Enregistre ou rafraîchit le handoff et envoie push + alerte Realtime."""
+    reason = resolve_handoff_reason(user_message, handoff_marker, lead_score)
+    if not reason:
+        return False
+    if (current_handoff or {}).get("handoff_status") == "active":
+        return False
+
+    supabase = get_supabase()
+    site_row = (
+        supabase.table("sites")
+        .select("organization_id, name")
+        .eq("id", site_id)
+        .single()
+        .execute()
+    )
+    if not site_row.data:
+        return False
+
+    push_payload = request_handoff(
+        conversation_id,
+        site_row.data["organization_id"],
+        reason,
+        site_row.data.get("name", "Chat"),
+        site_id=site_id,
+    )
+    if not push_payload:
+        return False
+
+    try:
+        sent = await notify_org_handoff(
+            push_payload["organization_id"],
+            title=push_payload["title"],
+            body=push_payload["body"],
+            data={
+                "type": "handoff_request",
+                "conversation_id": push_payload["conversation_id"],
+                "reason": push_payload["reason"],
+            },
+            site_id=push_payload.get("site_id"),
+        )
+        logger.info(
+            "Handoff notify conv=%s reason=%s fcm_sent=%s",
+            conversation_id,
+            reason,
+            sent,
+        )
+    except Exception as exc:
+        logger.warning("FCM handoff notify failed: %s", exc)
+
+    asyncio.create_task(schedule_handoff_reassurance(conversation_id))
+    return True
+
+
 async def stream_chat(
     site_id: str,
     conversation_id: str,
@@ -240,6 +299,9 @@ async def stream_chat(
     if handoff and handoff_blocks_ai(handoff):
         # Conseiller actif, ou attente initiale — pas de réponse IA automatique
         insert_user_message_only(conversation_id, user_message)
+        await _process_handoff_request(
+            conversation_id, site_id, user_message, None, 0, handoff
+        )
         return
 
     supabase = get_supabase()
@@ -405,39 +467,13 @@ async def stream_chat(
 
     lead_score = (qualification or {}).get("score", 0) if qualification else 0
     handoff_reason = resolve_handoff_reason(user_message, handoff_marker, lead_score)
-    if handoff_reason and not is_handoff_active((handoff or {}).get("handoff_status")):
-        site_row = (
-            supabase.table("sites")
-            .select("organization_id, name")
-            .eq("id", site_id)
-            .single()
-            .execute()
-        )
-        if site_row.data:
-            push_payload = request_handoff(
-                conversation_id,
-                site_row.data["organization_id"],
-                handoff_reason,
-                site_row.data.get("name", "Chat"),
-                site_id=site_id,
-            )
-            if push_payload:
-                try:
-                    await notify_org_handoff(
-                        push_payload["organization_id"],
-                        title=push_payload["title"],
-                        body=push_payload["body"],
-                        data={
-                            "type": "handoff_request",
-                            "conversation_id": push_payload["conversation_id"],
-                            "reason": push_payload["reason"],
-                        },
-                        site_id=push_payload.get("site_id"),
-                    )
-                except Exception as exc:
-                    logger.warning("FCM handoff notify failed: %s", exc)
-                asyncio.create_task(
-                    schedule_handoff_reassurance(conversation_id)
-                )
-            if handoff_reason == "user_request" and "conseiller" not in clean_response.lower():
-                yield "\n\nJe vous mets en relation avec un conseiller humain. Un instant…"
+    handoff_triggered = await _process_handoff_request(
+        conversation_id,
+        site_id,
+        user_message,
+        handoff_marker,
+        lead_score,
+        handoff,
+    )
+    if handoff_triggered and handoff_reason == "user_request" and "conseiller" not in clean_response.lower():
+        yield "\n\nJe vous mets en relation avec un conseiller humain. Un instant…"
