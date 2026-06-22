@@ -5,6 +5,7 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
+from app.services.handoff import release_handoff
 from app.services.supabase_client import get_supabase
 
 router = APIRouter(prefix="/widget", tags=["widget-handoff"])
@@ -77,3 +78,15 @@ async def poll_conversation_messages(
 
     rows = query.execute()
     return {"messages": rows.data or []}
+
+
+@router.post("/conversation/{conversation_id}/release")
+async def visitor_release_handoff(conversation_id: str, widget_key: str = Query(...)):
+    """Visiteur repasse à l'IA (inactivité ou choix explicite)."""
+    conv = _verify_widget_conversation(widget_key, conversation_id)
+    status = conv.get("handoff_status") or "none"
+    if status != "active":
+        return {"handoff_status": status, "released": False}
+
+    release_handoff(conversation_id, visitor_return=True)
+    return {"handoff_status": "returned", "released": True}

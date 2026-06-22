@@ -252,7 +252,7 @@ def claim_handoff(conversation_id: str, agent_user_id: str) -> dict:
     return {"handoff_status": "active", "assigned_agent_id": agent_user_id}
 
 
-def release_handoff(conversation_id: str) -> None:
+def release_handoff(conversation_id: str, *, visitor_return: bool = False) -> None:
     supabase = get_supabase()
     supabase.table("conversations").update(
         {
@@ -262,11 +262,22 @@ def release_handoff(conversation_id: str) -> None:
         }
     ).eq("id", conversation_id).execute()
 
+    if visitor_return:
+        content = (
+            "Très bien, je reprends la conversation avec vous. "
+            "Comment puis-je vous aider ?"
+        )
+    else:
+        content = (
+            "Le conseiller a quitté la conversation. "
+            "Je reprends — comment puis-je vous aider ?"
+        )
+
     supabase.table("messages").insert(
         {
             "conversation_id": conversation_id,
             "role": "assistant",
-            "content": "Le conseiller a quitté la conversation. Je reprends — comment puis-je vous aider ?",
+            "content": content,
         }
     ).execute()
 
