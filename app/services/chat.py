@@ -23,6 +23,7 @@ from app.services.handoff import (
     insert_user_message_only,
     is_handoff_active,
     request_handoff,
+    resolve_handoff_reason,
     schedule_handoff_reassurance,
 )
 from app.services.push_notifications import notify_org_handoff
@@ -403,11 +404,7 @@ async def stream_chat(
             ).execute()
 
     lead_score = (qualification or {}).get("score", 0) if qualification else 0
-    detected_reason = detect_handoff_reason(user_message, lead_score)
-    # Ignorer <!--HANDOFF:user_request--> si le visiteur n'a pas demandé un humain (ex. bonjour).
-    handoff_reason = detected_reason
-    if not handoff_reason and handoff_marker in ("ai_escalation", "hot_lead"):
-        handoff_reason = handoff_marker
+    handoff_reason = resolve_handoff_reason(user_message, handoff_marker, lead_score)
     if handoff_reason and not is_handoff_active((handoff or {}).get("handoff_status")):
         site_row = (
             supabase.table("sites")

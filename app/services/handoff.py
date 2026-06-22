@@ -14,10 +14,17 @@ logger = logging.getLogger(__name__)
 HANDOFF_REASSURANCE_DELAY_SECONDS = 45
 
 HUMAN_REQUEST_RE = re.compile(
-    r"(parler\s+(à|a)\s+(un\s+)?(humain|conseiller|personne|réel|vraie\s+personne)"
+    r"(parler\s+(à|a|avec)\s+(un\s+)?(humain|conseiller|personne|réel|vraie\s+personne|quelqu['']un)"
+    r"|(?:mis|mettre)\s+en\s+relation"
     r"|humain|conseiller|agent\s+(humain|réel)"
     r"|talk\s+to\s+(a\s+)?human|real\s+person|speak\s+to\s+someone"
-    r"|je\s+veux\s+(un\s+)?conseiller|besoin\s+d['']un\s+humain)",
+    r"|je\s+veux\s+(un\s+)?conseiller|besoin\s+d['']un\s+humain"
+    r"|(?:contacter|joindre)\s+(un\s+)?(conseiller|humain|(?:votre\s+)?équipe))",
+    re.IGNORECASE,
+)
+
+SIMPLE_GREETING_RE = re.compile(
+    r"^(bonjour|bonsoir|salut|hello|hi|hey|coucou|bonne journée|good morning|good evening)[\s!.?,]*$",
     re.IGNORECASE,
 )
 
@@ -29,6 +36,26 @@ def detect_handoff_reason(user_message: str, lead_score: int = 0) -> str | None:
         return "user_request"
     if lead_score >= 80:
         return "hot_lead"
+    return None
+
+
+def is_simple_greeting(user_message: str) -> bool:
+    return bool(SIMPLE_GREETING_RE.match(user_message.strip()))
+
+
+def resolve_handoff_reason(
+    user_message: str,
+    handoff_marker: str | None,
+    lead_score: int = 0,
+) -> str | None:
+    """Déclenche le handoff depuis le message visiteur ou le marqueur IA (sauf simple salutation)."""
+    detected = detect_handoff_reason(user_message, lead_score)
+    if detected:
+        return detected
+    if handoff_marker == "user_request" and not is_simple_greeting(user_message):
+        return "user_request"
+    if handoff_marker in ("ai_escalation", "hot_lead"):
+        return handoff_marker
     return None
 
 
