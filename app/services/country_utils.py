@@ -186,3 +186,23 @@ def enrich_qualification_country(
         result.pop("country", None)
 
     return result
+
+
+_IP_COUNTRY_HEADERS = (
+    "x-vercel-ip-country",
+    "cf-ipcountry",
+    "x-country-code",
+    "cloudfront-viewer-country",
+    "x-appengine-country",
+)
+
+
+def country_from_request(request) -> str | None:
+    """Pays visiteur depuis les en-têtes IP (Vercel, Cloudflare, etc.)."""
+    for header in _IP_COUNTRY_HEADERS:
+        code = (request.headers.get(header) or "").strip().upper()
+        if code and code not in ("", "XX", "T1", "ZZ"):
+            label = COUNTRY_ALIASES.get(_country_key(code))
+            if label:
+                return label
+    return None

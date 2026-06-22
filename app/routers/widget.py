@@ -1,6 +1,6 @@
 import httpx
 import logging
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from app.config import settings
@@ -11,7 +11,8 @@ from app.services.session_dates import filter_upcoming_sessions
 from app.services.session_store import ensure_training_sessions
 from app.services.site_summary import DEFAULT_WELCOME, ensure_welcome_intro
 from app.services.welcome_compose import compose_welcome_message
-from app.services.traffic_links import increment_traffic_link_click
+from app.services.traffic_links import record_traffic_link_visit
+from app.services.country_utils import country_from_request
 from app.services.supabase_client import get_supabase
 
 logger = logging.getLogger(__name__)
@@ -211,7 +212,7 @@ def _increment_tracked_link_stats(config: dict, traffic_slug: str | None, event_
 
 
 @router.post("/widget/event")
-async def track_widget_event(payload: WidgetEventRequest):
+async def track_widget_event(payload: WidgetEventRequest, request: Request):
     if payload.event_type not in VALID_EVENT_TYPES:
         raise HTTPException(status_code=400, detail="Invalid event_type")
     if payload.placement not in VALID_PLACEMENTS:
@@ -259,7 +260,13 @@ async def track_widget_event(payload: WidgetEventRequest):
         )
         if link.data:
             if payload.event_type == "open":
-                increment_traffic_link_click(site_id, payload.traffic_slug)
+                visit_country = country_from_request(request)
+                config = record_traffic_link_visit(
+                    site_id,
+                    payload.traffic_slug,
+                    config,
+                    visit_country,
+                )
             config = _increment_tracked_link_stats(config, payload.traffic_slug, payload.event_type)
 
     supabase.table("sites").update({"agent_config": config}).eq("id", site_id).execute()

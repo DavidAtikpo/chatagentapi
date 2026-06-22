@@ -316,6 +316,9 @@ def fetch_tracked_links_analytics(site_ids: list[str]) -> list[dict]:
         agent_config = site.get("agent_config") or {}
         by_link = agent_config.get("tracked_link_interactions") or {}
         interaction_total, interactions = _parse_link_interactions(by_link.get(link.get("slug")))
+        country_stats = parse_link_country_stats(
+            (agent_config.get("tracked_link_countries") or {}).get(link.get("slug"))
+        )
 
         link_convs = convs_by_link.get(link["id"], [])
         link_conv_ids = {c["id"] for c in link_convs}
@@ -360,6 +363,7 @@ def fetch_tracked_links_analytics(site_ids: list[str]) -> list[dict]:
                 "visitor_messages": visitor_messages,
                 "interaction_total": interaction_total,
                 "interactions": interactions,
+                "countries": country_stats,
                 "daily": [
                     daily_map.get(k)
                     or {

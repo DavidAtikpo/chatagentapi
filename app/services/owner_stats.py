@@ -3,6 +3,7 @@
 from collections import Counter
 
 from app.services.analytics_stats import fetch_embed_analytics, fetch_tracked_links_analytics
+from app.services.traffic_links import collect_tracked_visit_countries
 from app.services.country_utils import normalize_country
 from app.services.supabase_client import get_supabase
 
@@ -118,6 +119,8 @@ def fetch_owner_stats(user_id: str) -> dict | None:
             c = normalize_country(row.get("country"))
             if c:
                 countries_raw.append(c)
+
+        countries_raw.extend(collect_tracked_visit_countries(site_ids))
 
     return {
         "organization_name": org_name,

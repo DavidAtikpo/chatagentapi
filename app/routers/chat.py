@@ -5,7 +5,7 @@ from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
 from app.services.chat import stream_chat
-from app.services.country_utils import COUNTRY_ALIASES, _country_key
+from app.services.country_utils import country_from_request
 from app.services.handoff import get_conversation_handoff
 from app.services.plans import has_pro_features
 from app.services.supabase_client import get_supabase
@@ -13,26 +13,6 @@ from app.services.supabase_client import get_supabase
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
-# Headers added automatically by hosting providers (Vercel, Cloudflare, AWS, etc.)
-_IP_COUNTRY_HEADERS = [
-    "x-vercel-ip-country",   # Vercel
-    "cf-ipcountry",           # Cloudflare
-    "x-country-code",         # Generic / Railway custom header
-    "cloudfront-viewer-country",  # AWS CloudFront
-    "x-appengine-country",    # Google App Engine
-]
-
-
-def _country_from_request(request: Request) -> str | None:
-    """Return a canonical country name from hosting-provider IP headers, or None."""
-    for header in _IP_COUNTRY_HEADERS:
-        code = request.headers.get(header, "").strip().upper()
-        if code and code not in ("", "XX", "T1", "ZZ"):  # XX/T1/ZZ = unknown/Tor/reserved
-            label = COUNTRY_ALIASES.get(_country_key(code))
-            if label:
-                return label
-    return None
 
 
 class ChatRequest(BaseModel):
@@ -47,7 +27,7 @@ class ChatRequest(BaseModel):
 @router.post("/chat")
 async def chat(payload: ChatRequest, request: Request):
     supabase = get_supabase()
-    ip_country = _country_from_request(request)
+    ip_country = country_from_request(request)
     site = (
         supabase.table("sites")
         .select("id, name, url, agent_config, organization_id, is_active, whatsapp_number")
