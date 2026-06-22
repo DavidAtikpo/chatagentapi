@@ -2,6 +2,7 @@
 
 from collections import Counter
 
+from app.services.analytics_stats import fetch_embed_analytics, fetch_tracked_links_analytics
 from app.services.country_utils import normalize_country
 from app.services.supabase_client import get_supabase
 
@@ -84,28 +85,13 @@ def fetch_owner_stats(user_id: str) -> dict | None:
 
     tracked_links: list[dict] = []
     if site_ids:
-        links = (
-            supabase.table("traffic_links")
-            .select("id, slug, source, label, click_count, site_id, sites(name)")
-            .in_("site_id", site_ids)
-            .order("click_count", desc=True)
-            .execute()
-        )
-        for row in links.data or []:
-            site = row.get("sites") or {}
-            site_name = site.get("name") if isinstance(site, dict) else None
-            source = row.get("source") or "direct_link"
-            tracked_links.append(
-                {
-                    "id": row["id"],
-                    "slug": row.get("slug"),
-                    "label": row.get("label"),
-                    "source": source,
-                    "source_label": SOURCE_LABELS.get(source, source.replace("_", " ").title()),
-                    "click_count": row.get("click_count") or 0,
-                    "site_name": site_name,
-                }
-            )
+        tracked_links = fetch_tracked_links_analytics(site_ids)
+
+    embed = fetch_embed_analytics(site_ids) if site_ids else {
+        "totals": {"opens": 0, "conversations": 0, "visitor_messages": 0, "clicks": []},
+        "daily": [],
+        "monthly": [],
+    }
 
     countries_raw: list[str] = []
     if site_ids:
@@ -138,6 +124,7 @@ def fetch_owner_stats(user_id: str) -> dict | None:
         "conversations": conv_count,
         "leads": leads.count or 0,
         "tracked_links": tracked_links,
+        "embed": embed,
         "countries": _aggregate_countries(countries_raw),
         "sites_count": len(site_ids),
         "sites": site_summaries,
