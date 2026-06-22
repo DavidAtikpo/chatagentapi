@@ -1,4 +1,5 @@
 import httpx
+import logging
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
@@ -11,6 +12,8 @@ from app.services.session_store import ensure_training_sessions
 from app.services.site_summary import DEFAULT_WELCOME, ensure_welcome_intro
 from app.services.welcome_compose import compose_welcome_message
 from app.services.supabase_client import get_supabase
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -257,6 +260,24 @@ async def track_widget_event(payload: WidgetEventRequest):
             config = _increment_tracked_link_stats(config, payload.traffic_slug, payload.event_type)
 
     supabase.table("sites").update({"agent_config": config}).eq("id", site_id).execute()
+
+    if is_embed:
+        try:
+            supabase.table("widget_click_events").insert(
+                {
+                    "site_id": site_id,
+                    "organization_id": site.data["organization_id"],
+                    "conversation_id": payload.conversation_id,
+                    "event_type": payload.event_type,
+                    "placement": payload.placement,
+                    "label": payload.label,
+                    "target_url": payload.target_url,
+                    "page_url": payload.page_url,
+                }
+            ).execute()
+        except Exception as exc:
+            logger.warning("widget_click_events insert skipped: %s", exc)
+
     return {"ok": True}
 
 
