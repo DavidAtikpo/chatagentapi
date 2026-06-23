@@ -168,6 +168,8 @@ async def check_playwright_ready(*, force: bool = False) -> dict:
 _playwright_health_cache: dict | None = None
 _playwright_health_at: float = 0.0
 
+
+async def _fetch_httpx(
     client: httpx.AsyncClient, url: str, trace: dict | None = None
 ) -> PageFetchResult | None:
     try:
