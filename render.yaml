@@ -1,9 +1,9 @@
+# Blueprint Render — repo API seul (racine = api/)
 services:
   - type: web
     name: chatagent-api
     runtime: docker
     dockerfilePath: ./Dockerfile
-    dockerContext: .
     plan: starter
     healthCheckPath: /health
     envVars:

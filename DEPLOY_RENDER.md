@@ -1,26 +1,54 @@
 # Déploiement API sur Render (avec Playwright)
 
-Le crawl de sites JavaScript nécessite **Chromium + Playwright**. Sur Render, la méthode fiable est le **déploiement Docker**.
+Le repo GitHub contient **uniquement le dossier API** (pas de monorepo web+api).
+La racine du repo = `requirements.txt`, `Dockerfile`, `app/`, etc.
 
-## Option recommandée : Docker
+Le crawl de sites JavaScript nécessite **Chromium + Playwright**. Sur Render, utiliser le **déploiement Docker**.
 
-1. Render → votre service API → **Settings**
-2. **Environment** → Runtime : **Docker**
-3. **Root Directory** : `api` (si le repo contient web + api)
-4. **Dockerfile Path** : `./Dockerfile`
-5. Redéployer (**Manual Deploy** → Clear build cache & deploy)
+## Configuration Render (repo API seul)
 
-L'image `mcr.microsoft.com/playwright/python` inclut déjà Chromium.
+| Champ | Valeur |
+|-------|--------|
+| **Root Directory** | *(vide — laisser par défaut)* |
+| **Runtime** | **Docker** |
+| **Dockerfile Path** | `./Dockerfile` |
+| **Docker Command** | *(vide)* |
+| **Health Check Path** | `/health` |
+| **Instance Type** | **Starter** minimum (512 Mo+) |
 
-## Vérifier après déploiement
+### Build & Start
 
-Ouvrir :
+Avec Docker, **ne pas** remplir Build Command ni Start Command — le `Dockerfile` s’en charge :
+
+```dockerfile
+uvicorn app.main:app --host 0.0.0.0 --port $PORT
+```
+
+## Variables d'environnement
+
+Copier depuis `.env.example` dans Render → **Environment** :
+
+- `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`, `SUPABASE_JWT_SECRET`
+- `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`
+- `CORS_ORIGINS` — URL du dashboard Vercel
+- `APP_URL` — URL du site web
+- `API_URL` — `https://VOTRE-SERVICE.onrender.com/api/v1`
+- `WIDGET_CDN_URL`
+- `FIREBASE_SERVICE_ACCOUNT_JSON` — JSON sur une ligne (push mobile)
+
+## Déployer
+
+1. Push sur GitHub (`main`)
+2. Render → **Manual Deploy** → **Clear build cache & deploy** (1ère fois en Docker)
+3. Attendre la fin du build (~5–10 min)
+
+## Vérifier Playwright
 
 ```
-https://VOTRE-API.onrender.com/health
+https://VOTRE-SERVICE.onrender.com/health
 ```
 
-Réponse attendue :
+Attendu :
 
 ```json
 {
@@ -29,24 +57,12 @@ Réponse attendue :
 }
 ```
 
-Si `"available": false`, consulter `"error"` dans la réponse.
+Puis relancer **Re-crawler** sur le dashboard.
 
-## Option native (non recommandée)
+## Erreurs fréquentes
 
-Build command :
-
-```bash
-pip install -r requirements.txt && python -m playwright install chromium
-```
-
-Start command :
-
-```bash
-uvicorn app.main:app --host 0.0.0.0 --port $PORT
-```
-
-Souvent **insuffisant** sur Render natif (libs système manquantes). Préférer Docker.
-
-## Mémoire
-
-Chromium headless consomme ~300–500 Mo RAM. Utiliser au minimum le plan **Starter** (512 Mo+) sur Render.
+| Problème | Cause | Solution |
+|----------|-------|----------|
+| Playwright indisponible | Runtime Python au lieu de Docker | Runtime → **Docker** |
+| Dockerfile not found | Root Directory rempli par erreur | Root Directory → **vide** |
+| Crawl crash / lent | RAM insuffisante | Plan **Starter** ou plus |
