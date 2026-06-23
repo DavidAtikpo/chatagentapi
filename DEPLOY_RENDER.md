@@ -45,7 +45,7 @@ Copier depuis `.env.example` dans Render → **Environment** :
 ## Vérifier Playwright
 
 ```
-https://VOTRE-SERVICE.onrender.com/health
+https://chatagentapi-1.onrender.com/health
 ```
 
 Attendu :

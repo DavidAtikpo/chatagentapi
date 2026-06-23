@@ -1,5 +1,5 @@
 # Image officielle Playwright : Python + Chromium + dépendances système
-FROM mcr.microsoft.com/playwright/python:v1.50.0-noble
+FROM mcr.microsoft.com/playwright/python:v1.60.0-noble
 
 WORKDIR /app
 
