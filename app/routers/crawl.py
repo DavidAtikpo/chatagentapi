@@ -6,6 +6,7 @@ from pydantic import BaseModel, HttpUrl
 
 from app.services.cors_origins import invalidate_cors_cache
 from app.services.crawler import crawl_site, save_site_image
+from app.services.crawl_errors import clear_crawl_error, save_crawl_error, CrawlFailure, CrawlErrorCode
 from app.services.crawl_progress import complete_progress, fail_progress, get_progress
 from app.services.formation_context import ingest_formation_pages, refresh_formation_profiles
 from app.services.page_fetcher import PlaywrightSession, fetch_page_html
@@ -62,10 +63,19 @@ async def _crawl_and_embed(site_id: str, url: str):
         supabase.table("sites").update(
             {"crawl_status": "completed", "last_crawled_at": "now()"}
         ).eq("id", site_id).execute()
+        clear_crawl_error(site_id)
         invalidate_cors_cache()
-    except Exception:
+    except Exception as exc:
         logger.exception("Crawl échoué — site_id=%s", site_id)
-        fail_progress(site_id)
+        progress = get_progress(site_id)
+        message = progress.get("message") if progress else "Échec du crawl"
+        error_code = progress.get("error_code") if progress else CrawlErrorCode.UNKNOWN.value
+        if not progress or not progress.get("error_code"):
+            save_crawl_error(
+                site_id,
+                CrawlFailure(CrawlErrorCode.UNKNOWN, message or str(exc) or "Échec du crawl"),
+            )
+        fail_progress(site_id, message, error_code)
         supabase.table("sites").update({"crawl_status": "failed"}).eq("id", site_id).execute()
 
 

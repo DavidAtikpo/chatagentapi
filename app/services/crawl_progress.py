@@ -86,12 +86,13 @@ def complete_progress(site_id: str, pages_crawled: int, chunks_embedded: int) ->
     }
 
 
-def fail_progress(site_id: str, message: str = "Échec du crawl") -> None:
+def fail_progress(site_id: str, message: str = "Échec du crawl", error_code: str | None = None) -> None:
     entry = _store.setdefault(site_id, {})
     entry.update(
         {
             "status": "failed",
             "message": message,
+            "error_code": error_code,
             "updated_at": _now(),
         }
     )

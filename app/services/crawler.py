@@ -4,6 +4,12 @@ from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup
 
+from app.services.crawl_errors import (
+    check_robots_txt,
+    clear_crawl_error,
+    diagnose_empty_crawl,
+    save_crawl_error,
+)
 from app.services.crawl_progress import fail_progress, init_progress, update_crawl_page
 from app.services.page_fetcher import CRAWL_TIMEOUT, PlaywrightSession, fetch_page_html
 import httpx
@@ -122,6 +128,7 @@ async def discover_links(base_url: str, html: str, max_links: int = 50) -> list[
 
 async def crawl_site(site_id: str, start_url: str, max_pages: int = 30) -> dict:
     supabase = get_supabase()
+    clear_crawl_error(site_id)
     supabase.table("sites").update({"crawl_status": "running"}).eq("id", site_id).execute()
     supabase.table("knowledge_chunks").delete().eq("site_id", site_id).execute()
     supabase.table("crawled_pages").delete().eq("site_id", site_id).execute()
@@ -135,19 +142,38 @@ async def crawl_site(site_id: str, start_url: str, max_pages: int = 30) -> dict:
     pages_crawled = 0
     all_sessions: list[dict] = []
     site_image_url: str | None = None
+    homepage_trace: dict = {}
+    robots_blocked = False
+    homepage_probed = False
+    failure_saved = False
+    playwright = PlaywrightSession()
 
     try:
-        playwright = PlaywrightSession()
         await playwright.start()
         try:
             async with httpx.AsyncClient(timeout=CRAWL_TIMEOUT, follow_redirects=True) as client:
+                robots_blocked = await check_robots_txt(start_url, client)
+
                 while queue and pages_crawled < max_pages:
                     url = queue.pop(0)
                     if url in visited or should_skip_crawl_url(url):
                         continue
                     visited.add(url)
 
-                    fetched = await fetch_page_html(url, client=client, playwright=playwright)
+                    trace = homepage_trace if not homepage_probed else None
+                    if trace is not None:
+                        homepage_probed = True
+                        trace["url"] = url
+
+                    fetched = await fetch_page_html(
+                        url, client=client, playwright=playwright, trace=trace
+                    )
+                    if fetched and trace is not None:
+                        trace["html"] = fetched.html
+                        trace["status_code"] = fetched.status_code
+                        if fetched.source == "playwright":
+                            trace["playwright_used"] = True
+
                     if not fetched:
                         logger.warning("  Page ignorée (fetch) : %s", url)
                         continue
@@ -222,13 +248,20 @@ async def crawl_site(site_id: str, start_url: str, max_pages: int = 30) -> dict:
         logger.info("  Total sessions extraites : %s", len(sessions))
 
         if pages_crawled == 0:
-            msg = (
-                f"Aucune page lue pour {start_url} — vérifiez l'URL du site "
-                "(ex. https://cides.tf, pas un site tiers comme odoo.com) ou réessayez plus tard"
+            failure = diagnose_empty_crawl(
+                start_url,
+                homepage_html=homepage_trace.get("html"),
+                homepage_status=homepage_trace.get("status_code"),
+                network_error=homepage_trace.get("network_error"),
+                playwright_tried=bool(homepage_trace.get("playwright_used")),
+                playwright_available=not playwright.disabled,
+                robots_blocked=robots_blocked,
             )
-            fail_progress(site_id, msg)
+            save_crawl_error(site_id, failure)
+            fail_progress(site_id, failure.message, failure.code.value)
+            failure_saved = True
             supabase.table("sites").update({"crawl_status": "failed"}).eq("id", site_id).execute()
-            raise RuntimeError(msg)
+            raise RuntimeError(failure.message)
 
         return {
             "site_id": site_id,
@@ -238,6 +271,17 @@ async def crawl_site(site_id: str, start_url: str, max_pages: int = 30) -> dict:
             "site_image_url": site_image_url,
         }
     except Exception as exc:
-        fail_progress(site_id, "Échec lors de la lecture du site")
-        supabase.table("sites").update({"crawl_status": "failed"}).eq("id", site_id).execute()
+        if not failure_saved:
+            failure = diagnose_empty_crawl(
+                start_url,
+                homepage_html=homepage_trace.get("html"),
+                homepage_status=homepage_trace.get("status_code"),
+                network_error=homepage_trace.get("network_error") or str(exc),
+                playwright_tried=bool(homepage_trace.get("playwright_used")),
+                playwright_available=not playwright.disabled,
+                robots_blocked=robots_blocked,
+            )
+            save_crawl_error(site_id, failure)
+            fail_progress(site_id, failure.message, failure.code.value)
+            supabase.table("sites").update({"crawl_status": "failed"}).eq("id", site_id).execute()
         raise exc

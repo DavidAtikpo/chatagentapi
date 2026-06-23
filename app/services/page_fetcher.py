@@ -121,11 +121,16 @@ class PlaywrightSession:
             self._playwright = None
 
 
-async def _fetch_httpx(client: httpx.AsyncClient, url: str) -> PageFetchResult | None:
+async def _fetch_httpx(
+    client: httpx.AsyncClient, url: str, trace: dict | None = None
+) -> PageFetchResult | None:
     try:
         response = await client.get(url, headers=CRAWL_HEADERS)
     except (httpx.TimeoutException, httpx.RequestError) as exc:
-        logger.warning("httpx échec %s : %s", url, exc or type(exc).__name__)
+        detail = str(exc) or type(exc).__name__
+        logger.warning("httpx échec %s : %s", url, detail)
+        if trace is not None:
+            trace["network_error"] = detail
         return None
 
     content_type = response.headers.get("content-type", "")
@@ -147,9 +152,10 @@ async def fetch_page_html(
     *,
     client: httpx.AsyncClient,
     playwright: PlaywrightSession | None = None,
+    trace: dict | None = None,
 ) -> PageFetchResult | None:
     """Try httpx; fall back to Playwright on network/HTTP errors or empty JS shells."""
-    httpx_result = await _fetch_httpx(client, url)
+    httpx_result = await _fetch_httpx(client, url, trace)
 
     needs_browser = False
     if httpx_result is None:
@@ -171,6 +177,8 @@ async def fetch_page_html(
             return httpx_result if httpx_result and httpx_result.status_code < 400 else None
 
     browser_result = await playwright.fetch(url)
+    if trace is not None:
+        trace["playwright_used"] = True
     if browser_result and browser_result.status_code < 400:
         if browser_result.source == "playwright":
             logger.info("Page chargée via Playwright : %s", url)
