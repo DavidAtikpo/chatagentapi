@@ -2,23 +2,20 @@ import logging
 import re
 from urllib.parse import urljoin, urlparse
 
-import httpx
 from bs4 import BeautifulSoup
 
 from app.services.crawl_progress import fail_progress, init_progress, update_crawl_page
+from app.services.page_fetcher import CRAWL_TIMEOUT, PlaywrightSession, fetch_page_html
+import httpx
 from app.services.session_extractor import (
     dedupe_sessions,
     extract_sessions_from_html,
     formation_page_urls,
 )
 from app.services.supabase_client import get_supabase
-from app.services.text_quality import is_html_content_type, is_readable_text, should_skip_crawl_url
+from app.services.text_quality import is_readable_text, should_skip_crawl_url
 
 logger = logging.getLogger(__name__)
-
-# Sites lents (WordPress, hébergeurs mutualisés) : délai généreux par page.
-CRAWL_TIMEOUT = httpx.Timeout(60.0, connect=20.0)
-CRAWL_HEADERS = {"User-Agent": "ChatbotSaaS-Crawler/1.0", "Accept": "text/html,application/xhtml+xml"}
 
 
 def _normalize_url(base: str, href: str) -> str | None:
@@ -140,87 +137,86 @@ async def crawl_site(site_id: str, start_url: str, max_pages: int = 30) -> dict:
     site_image_url: str | None = None
 
     try:
-        async with httpx.AsyncClient(timeout=CRAWL_TIMEOUT, follow_redirects=True) as client:
-            while queue and pages_crawled < max_pages:
-                url = queue.pop(0)
-                if url in visited or should_skip_crawl_url(url):
-                    continue
-                visited.add(url)
+        playwright = PlaywrightSession()
+        await playwright.start()
+        try:
+            async with httpx.AsyncClient(timeout=CRAWL_TIMEOUT, follow_redirects=True) as client:
+                while queue and pages_crawled < max_pages:
+                    url = queue.pop(0)
+                    if url in visited or should_skip_crawl_url(url):
+                        continue
+                    visited.add(url)
 
-                try:
-                    response = await client.get(url, headers=CRAWL_HEADERS)
-                except (httpx.TimeoutException, httpx.RequestError) as exc:
-                    detail = str(exc) or type(exc).__name__
-                    logger.warning("  Page ignorée (réseau) : %s — %s", url, detail)
-                    continue
+                    fetched = await fetch_page_html(url, client=client, playwright=playwright)
+                    if not fetched:
+                        logger.warning("  Page ignorée (fetch) : %s", url)
+                        continue
 
-                if response.status_code >= 400:
-                    logger.warning("  Page ignorée (HTTP %s) : %s", response.status_code, url)
-                    continue
+                    if fetched.status_code >= 400:
+                        logger.warning("  Page ignorée (HTTP %s) : %s", fetched.status_code, url)
+                        continue
 
-                content_type = response.headers.get("content-type", "")
-                if not is_html_content_type(content_type):
-                    logger.info("  Ignoré (non HTML) : %s [%s]", url, content_type)
-                    continue
+                    html = fetched.html
+                    page_url = fetched.url
+                    if site_image_url is None:
+                        site_image_url = _extract_site_image(html, page_url)
+                    title, text = _extract_text(html)
+                    all_sessions.extend(extract_sessions_from_html(html, page_url))
+                    if not is_readable_text(text, min_len=50):
+                        logger.info("  Ignoré (contenu illisible) : %s", page_url)
+                        continue
 
-                html = response.text
-                if site_image_url is None:
-                    site_image_url = _extract_site_image(html, url)
-                title, text = _extract_text(html)
-                all_sessions.extend(extract_sessions_from_html(html, url))
-                if not is_readable_text(text, min_len=50):
-                    logger.info("  Ignoré (contenu illisible) : %s", url)
-                    continue
+                    if not title:
+                        title = page_url
 
-                if not title:
-                    title = url
-
-                supabase.table("crawled_pages").upsert(
-                    {
-                        "site_id": site_id,
-                        "url": url,
-                        "title": title,
-                        "status_code": response.status_code,
-                    },
-                    on_conflict="site_id,url",
-                ).execute()
-
-                chunks = _chunk_text(text)
-                for index, chunk in enumerate(chunks):
-                    supabase.table("knowledge_chunks").insert(
+                    supabase.table("crawled_pages").upsert(
                         {
                             "site_id": site_id,
-                            "source_url": url,
+                            "url": page_url,
                             "title": title,
-                            "content": chunk,
-                            "chunk_index": index,
-                        }
+                            "status_code": fetched.status_code,
+                        },
+                        on_conflict="site_id,url",
                     ).execute()
 
-                pages_crawled += 1
-                logger.info("  Page %s/%s : %s", pages_crawled, max_pages, url)
-                update_crawl_page(site_id, pages_crawled, max_pages, url)
-                for link in await discover_links(url, html):
-                    if link not in visited:
-                        queue.append(link)
+                    chunks = _chunk_text(text)
+                    for index, chunk in enumerate(chunks):
+                        supabase.table("knowledge_chunks").insert(
+                            {
+                                "site_id": site_id,
+                                "source_url": page_url,
+                                "title": title,
+                                "content": chunk,
+                                "chunk_index": index,
+                            }
+                        ).execute()
 
-            for formation_url in formation_page_urls(start_url):
-                if formation_url in visited:
-                    continue
-                try:
-                    response = await client.get(formation_url, headers=CRAWL_HEADERS)
-                    if response.status_code < 400 and is_html_content_type(
-                        response.headers.get("content-type", "")
-                    ):
-                        found = extract_sessions_from_html(response.text, formation_url)
-                        logger.info(
-                            "  Sessions formation : %s → %s lien(s)",
-                            formation_url,
-                            len(found),
+                    pages_crawled += 1
+                    logger.info("  Page %s/%s : %s", pages_crawled, max_pages, page_url)
+                    update_crawl_page(site_id, pages_crawled, max_pages, page_url)
+                    for link in await discover_links(page_url, html):
+                        if link not in visited:
+                            queue.append(link)
+
+                for formation_url in formation_page_urls(start_url):
+                    if formation_url in visited:
+                        continue
+                    try:
+                        fetched = await fetch_page_html(
+                            formation_url, client=client, playwright=playwright
                         )
-                        all_sessions.extend(found)
-                except Exception as exc:
-                    logger.warning("  Sessions formation échouées %s : %s", formation_url, exc)
+                        if fetched and fetched.status_code < 400:
+                            found = extract_sessions_from_html(fetched.html, formation_url)
+                            logger.info(
+                                "  Sessions formation : %s → %s lien(s)",
+                                formation_url,
+                                len(found),
+                            )
+                            all_sessions.extend(found)
+                    except Exception as exc:
+                        logger.warning("  Sessions formation échouées %s : %s", formation_url, exc)
+        finally:
+            await playwright.close()
 
         sessions = dedupe_sessions(all_sessions)
         logger.info("  Total sessions extraites : %s", len(sessions))

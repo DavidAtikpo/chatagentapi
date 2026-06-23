@@ -5,6 +5,7 @@ from pydantic import BaseModel
 
 from app.config import settings
 from app.services.crawler import _extract_site_image, save_site_image
+from app.services.page_fetcher import PlaywrightSession, fetch_page_html
 from app.services.plans import has_pro_features
 from app.services.formation_context import refresh_formation_profiles
 from app.services.session_dates import filter_upcoming_sessions
@@ -29,16 +30,19 @@ async def ensure_site_image(site_id: str, site_url: str, config: dict) -> str | 
     if not site_url:
         return None
     try:
-        async with httpx.AsyncClient(timeout=12, follow_redirects=True) as client:
-            response = await client.get(
-                site_url, headers={"User-Agent": "ChatbotSaaS-Crawler/1.0"}
-            )
-            if response.status_code >= 400:
-                return None
-            image_url = _extract_site_image(response.text, str(response.url))
-            if image_url:
-                save_site_image(site_id, image_url)
-                return image_url
+        playwright = PlaywrightSession()
+        await playwright.start()
+        try:
+            async with httpx.AsyncClient(timeout=12, follow_redirects=True) as client:
+                fetched = await fetch_page_html(site_url, client=client, playwright=playwright)
+                if not fetched or fetched.status_code >= 400:
+                    return None
+                image_url = _extract_site_image(fetched.html, fetched.url)
+                if image_url:
+                    save_site_image(site_id, image_url)
+                    return image_url
+        finally:
+            await playwright.close()
     except Exception:
         pass
     return None

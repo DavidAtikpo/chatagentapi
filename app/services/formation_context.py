@@ -4,9 +4,10 @@ import re
 import httpx
 
 from app.services.crawler import _chunk_text, _extract_text
+from app.services.page_fetcher import PlaywrightSession, fetch_page_html
 from app.services.session_extractor import formation_page_urls
 from app.services.supabase_client import get_supabase
-from app.services.text_quality import filter_text_chunks, is_html_content_type, is_readable_text
+from app.services.text_quality import filter_text_chunks, is_readable_text
 
 logger = logging.getLogger(__name__)
 
@@ -184,48 +185,51 @@ async def ingest_formation_pages(site_id: str, site_url: str) -> int:
     supabase = get_supabase()
     pages_saved = 0
 
-    async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
-        for page_url in formation_page_urls(site_url):
-            try:
-                response = await client.get(
-                    page_url, headers={"User-Agent": "ChatbotSaaS-Crawler/1.0"}
-                )
-            except Exception as exc:
-                logger.warning("Formation page fetch failed %s: %s", page_url, exc)
-                continue
+    playwright = PlaywrightSession()
+    await playwright.start()
+    try:
+        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+            for page_url in formation_page_urls(site_url):
+                try:
+                    fetched = await fetch_page_html(
+                        page_url, client=client, playwright=playwright
+                    )
+                except Exception as exc:
+                    logger.warning("Formation page fetch failed %s: %s", page_url, exc)
+                    continue
 
-            if response.status_code >= 400:
-                continue
-            if not is_html_content_type(response.headers.get("content-type", "")):
-                continue
+                if not fetched or fetched.status_code >= 400:
+                    continue
 
-            title, text = _extract_text(response.text)
-            if not is_readable_text(text, min_len=50):
-                continue
+                title, text = _extract_text(fetched.html)
+                if not is_readable_text(text, min_len=50):
+                    continue
 
-            supabase.table("knowledge_chunks").delete().eq("site_id", site_id).eq("source_url", page_url).execute()
-            supabase.table("crawled_pages").upsert(
-                {
-                    "site_id": site_id,
-                    "url": page_url,
-                    "title": title or page_url,
-                    "status_code": response.status_code,
-                },
-                on_conflict="site_id,url",
-            ).execute()
-
-            for index, chunk in enumerate(_chunk_text(text)):
-                supabase.table("knowledge_chunks").insert(
+                supabase.table("knowledge_chunks").delete().eq("site_id", site_id).eq("source_url", page_url).execute()
+                supabase.table("crawled_pages").upsert(
                     {
                         "site_id": site_id,
-                        "source_url": page_url,
+                        "url": page_url,
                         "title": title or page_url,
-                        "content": chunk,
-                        "chunk_index": index,
-                    }
+                        "status_code": fetched.status_code,
+                    },
+                    on_conflict="site_id,url",
                 ).execute()
 
-            pages_saved += 1
-            logger.info("Formation page indexed — %s", page_url)
+                for index, chunk in enumerate(_chunk_text(text)):
+                    supabase.table("knowledge_chunks").insert(
+                        {
+                            "site_id": site_id,
+                            "source_url": page_url,
+                            "title": title or page_url,
+                            "content": chunk,
+                            "chunk_index": index,
+                        }
+                    ).execute()
+
+                pages_saved += 1
+                logger.info("Formation page indexed — %s", page_url)
+    finally:
+        await playwright.close()
 
     return pages_saved
