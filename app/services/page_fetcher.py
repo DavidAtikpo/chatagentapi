@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass
 from typing import Literal
 
@@ -22,6 +23,14 @@ CRAWL_HEADERS = {
     "User-Agent": BROWSER_USER_AGENT,
     "Accept": "text/html,application/xhtml+xml",
 }
+
+# Requis sur Linux conteneurisé (Render, Docker) — sans sandbox root
+CHROMIUM_ARGS = [
+    "--no-sandbox",
+    "--disable-setuid-sandbox",
+    "--disable-dev-shm-usage",
+    "--disable-gpu",
+]
 
 FetchSource = Literal["httpx", "playwright"]
 
@@ -62,6 +71,7 @@ class PlaywrightSession:
         self._playwright = None
         self._browser = None
         self._disabled = False
+        self.launch_error: str | None = None
 
     @property
     def disabled(self) -> bool:
@@ -76,15 +86,25 @@ class PlaywrightSession:
             return
         try:
             from playwright.async_api import async_playwright
-        except ImportError:
+        except ImportError as exc:
+            self.launch_error = f"Package playwright absent : {exc}"
             logger.warning("Playwright non installé — repli JS désactivé")
             self._disabled = True
             return
         try:
             self._playwright = await async_playwright().start()
-            self._browser = await self._playwright.chromium.launch(headless=True)
+            self._browser = await self._playwright.chromium.launch(
+                headless=True,
+                args=CHROMIUM_ARGS,
+            )
+            self.launch_error = None
+            logger.info(
+                "Chromium Playwright prêt (PLAYWRIGHT_BROWSERS_PATH=%s)",
+                os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "default"),
+            )
         except Exception as exc:
-            logger.warning("Impossible de lancer Chromium Playwright : %s", exc)
+            self.launch_error = str(exc) or type(exc).__name__
+            logger.warning("Impossible de lancer Chromium Playwright : %s", self.launch_error)
             self._disabled = True
 
     async def fetch(self, url: str, timeout_ms: int = 15000) -> PageFetchResult | None:
@@ -121,7 +141,33 @@ class PlaywrightSession:
             self._playwright = None
 
 
-async def _fetch_httpx(
+async def check_playwright_ready(*, force: bool = False) -> dict:
+    """Health probe — vérifie que Chromium peut démarrer (résultat mis en cache 10 min)."""
+    import time
+
+    global _playwright_health_cache, _playwright_health_at
+    if (
+        not force
+        and _playwright_health_cache is not None
+        and time.time() - _playwright_health_at < 600
+    ):
+        return _playwright_health_cache
+
+    session = PlaywrightSession()
+    await session.start()
+    result = {
+        "available": session.available,
+        "error": session.launch_error,
+    }
+    await session.close()
+    _playwright_health_cache = result
+    _playwright_health_at = time.time()
+    return result
+
+
+_playwright_health_cache: dict | None = None
+_playwright_health_at: float = 0.0
+
     client: httpx.AsyncClient, url: str, trace: dict | None = None
 ) -> PageFetchResult | None:
     try:

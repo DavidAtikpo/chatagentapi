@@ -254,7 +254,8 @@ async def crawl_site(site_id: str, start_url: str, max_pages: int = 30) -> dict:
                 homepage_status=homepage_trace.get("status_code"),
                 network_error=homepage_trace.get("network_error"),
                 playwright_tried=bool(homepage_trace.get("playwright_used")),
-                playwright_available=not playwright.disabled,
+                playwright_available=playwright.available,
+                playwright_error=playwright.launch_error,
                 robots_blocked=robots_blocked,
             )
             save_crawl_error(site_id, failure)
@@ -278,7 +279,8 @@ async def crawl_site(site_id: str, start_url: str, max_pages: int = 30) -> dict:
                 homepage_status=homepage_trace.get("status_code"),
                 network_error=homepage_trace.get("network_error") or str(exc),
                 playwright_tried=bool(homepage_trace.get("playwright_used")),
-                playwright_available=not playwright.disabled,
+                playwright_available=playwright.available,
+                playwright_error=playwright.launch_error,
                 robots_blocked=robots_blocked,
             )
             save_crawl_error(site_id, failure)

@@ -148,6 +148,7 @@ def diagnose_empty_crawl(
     network_error: str | None = None,
     playwright_tried: bool = False,
     playwright_available: bool = True,
+    playwright_error: str | None = None,
     robots_blocked: bool = False,
 ) -> CrawlFailure:
     if robots_blocked:
@@ -162,9 +163,13 @@ def diagnose_empty_crawl(
 
     if homepage_html and not is_readable_text(_quick_visible_text(homepage_html), min_len=50):
         if not playwright_available:
+            detail = playwright_error or (
+                "Déployez l'API avec le Dockerfile Playwright (voir api/DEPLOY_RENDER.md)."
+            )
             return CrawlFailure(
                 CrawlErrorCode.PLAYWRIGHT_UNAVAILABLE,
                 "Site JavaScript — Playwright (navigateur headless) n'est pas disponible sur le serveur.",
+                detail,
             )
         if playwright_tried:
             return CrawlFailure(
