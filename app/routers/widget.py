@@ -12,7 +12,7 @@ from app.services.languages import normalize_language_code
 from app.services.session_dates import filter_upcoming_sessions
 from app.services.session_store import ensure_training_sessions
 from app.services.site_summary import DEFAULT_WELCOME, ensure_welcome_intro, intro_matches_language
-from app.services.welcome_compose import compose_welcome_message
+from app.services.welcome_compose import compose_welcome_message, is_generic_welcome
 from app.services.traffic_links import record_traffic_link_visit
 from app.services.country_utils import country_from_request
 from app.services.supabase_client import get_supabase
@@ -116,6 +116,10 @@ async def get_widget_config(widget_key: str, lang: str | None = Query(None)):
     base_welcome = (config.get("welcome_message") or "").strip()
     welcome_msg_lang = normalize_language_code(config.get("welcome_message_lang") or "")
 
+    if is_generic_welcome(base_welcome):
+        welcome_customized = False
+        base_welcome = ""
+
     # Custom welcome in another language → auto intro for the requested language
     if welcome_customized and base_welcome:
         stored_msg_lang = welcome_msg_lang or site_default_lang
@@ -123,18 +127,8 @@ async def get_widget_config(widget_key: str, lang: str | None = Query(None)):
             welcome_customized = False
             base_welcome = ""
 
-    intro = ""
     if not welcome_customized:
-        intro = await ensure_welcome_intro(
-            site.data["id"],
-            site.data["name"],
-            site_url,
-            config,
-            language,
-            persist=True,
-        )
-        if intro:
-            config["welcome_intro"] = intro
+        base_welcome = ""
 
     welcome_image = await ensure_site_image(site.data["id"], site_url, config)
     if welcome_image and not config.get("site_image_url") and not config.get("logo_url"):
@@ -147,6 +141,19 @@ async def get_widget_config(widget_key: str, lang: str | None = Query(None)):
     elif base_welcome and not intro_matches_language(base_welcome, language):
         base_welcome = ""
 
+    intro = ""
+    if not welcome_customized:
+        intro = await ensure_welcome_intro(
+            site.data["id"],
+            site.data["name"],
+            site_url,
+            config,
+            language,
+            persist=True,
+        )
+
+    intro_for_compose = intro.strip() if intro and intro_matches_language(intro, language) else ""
+
     welcome = compose_welcome_message(
         base_welcome,
         site.data["name"],
@@ -154,7 +161,8 @@ async def get_widget_config(widget_key: str, lang: str | None = Query(None)):
         profiles,
         welcome_customized=welcome_customized,
         site_url=site_url,
-        intro=intro or config.get("welcome_intro") or "",
+        intro=intro_for_compose,
+        language=language,
     )
 
     contact_whatsapp = (

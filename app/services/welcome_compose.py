@@ -7,6 +7,33 @@ from app.services.text_quality import clean_text_line, is_readable_text
 
 DEFAULT_WELCOME = "Bonjour ! Comment puis-je vous aider ?"
 
+GENERIC_WELCOME_TEXTS = frozenset(
+    {
+        DEFAULT_WELCOME,
+        "Bonjour ! Comment puis-je vous aider ?",
+        "Bonjour! Comment puis-je vous aider ?",
+        "Hello! How can I help you?",
+        "Hello! How can I help you today?",
+        "Hi! How can I help you?",
+    }
+)
+
+_SHORT_WELCOME: dict[str, tuple[str, str, str]] = {
+    "fr": ("Bienvenue ! 👋", "Comment puis-je vous aider ? 😊", "Prochaines sessions disponibles :"),
+    "en": ("Welcome! 👋", "How can I help you? 😊", "Upcoming sessions:"),
+    "it": ("Benvenuto! 👋", "Come posso aiutarti? 😊", "Prossime sessioni:"),
+    "es": ("¡Bienvenido! 👋", "¿Cómo puedo ayudarte? 😊", "Próximas sesiones:"),
+    "pt": ("Bem-vindo! 👋", "Como posso ajudar? 😊", "Próximas sessões:"),
+    "de": ("Willkommen! 👋", "Wie kann ich Ihnen helfen? 😊", "Nächste Termine:"),
+}
+
+
+def is_generic_welcome(text: str) -> bool:
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return True
+    return cleaned in GENERIC_WELCOME_TEXTS
+
 _BAD_WELCOME_MARKERS = (
     "Passer au contenu principal",
     "Passer au contenu",
@@ -238,23 +265,29 @@ def build_generic_welcome(
     intro: str,
     sessions: list[dict[str, Any]],
     site_url: str = "",
+    language: str = "fr",
 ) -> str:
     """Welcome for any (non-branded) client, built from their own site only."""
+    from app.services.languages import normalize_language_code
+
+    lang = normalize_language_code(language)
     clean_intro = _strip_sessions(intro).strip()
 
     if is_usable_intro(clean_intro):
         parts = [clean_intro]
     else:
-        parts = [f"Bienvenue ! 👋"]
+        hello, question, _sessions_hdr = _SHORT_WELCOME.get(lang, _SHORT_WELCOME["fr"])
+        parts = [hello]
         if site_url:
-            parts.append(f"Site : {site_url}")
+            parts.append(f"{site_url}")
         parts.append("")
-        parts.append("Comment puis-je vous aider ? 😊")
+        parts.append(question)
 
     upcoming = sort_sessions_by_date(filter_upcoming_sessions(sessions))
     if upcoming:
+        _, _, sessions_hdr = _SHORT_WELCOME.get(lang, _SHORT_WELCOME["fr"])
         parts.append("")
-        parts.append("Prochaines sessions disponibles :")
+        parts.append(sessions_hdr)
         for session in upcoming[:8]:
             label = _short_session_label(session.get("label", "Session"))
             url = session.get("url", "")
@@ -273,16 +306,24 @@ def compose_welcome_message(
     welcome_customized: bool = False,
     site_url: str = "",
     intro: str = "",
+    language: str = "fr",
 ) -> str:
     from app.services.site_profiles import is_cides_site
 
     # A welcome manually written by the client always wins.
-    if welcome_customized and is_usable_welcome(base_welcome):
+    if welcome_customized and is_usable_welcome(base_welcome) and not is_generic_welcome(base_welcome):
         return base_welcome.strip()
 
     # Branded CI.DES catalog only for CI.DES domains.
     if is_cides_site(site_url):
         return build_full_welcome(site_name, sessions, formation_profiles)
 
-    # Every other client: rich presentation from their own crawled site.
-    return build_generic_welcome(site_name, intro or base_welcome, sessions, site_url=site_url)
+    # Auto mode: use generated intro only (never a stale welcome_message).
+    content_intro = (intro or "").strip()
+    return build_generic_welcome(
+        site_name,
+        content_intro,
+        sessions,
+        site_url=site_url,
+        language=language,
+    )

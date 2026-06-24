@@ -175,9 +175,71 @@ async def ensure_welcome_intro(
         return legacy_intro
 
     intro = await generate_company_intro(site_id, site_name, language, site_url=site_url)
+    if not intro:
+        intro = await _translate_intro_from_cache(intros, config, site_name, language)
+
     if intro and persist:
         _persist_intro(site_id, intro, language)
     return intro
+
+
+async def _translate_intro_from_cache(
+    intros: dict[str, str],
+    config: dict,
+    site_name: str,
+    language: str,
+) -> str:
+    """If generation failed, translate an existing intro from another language."""
+    language = normalize_language_code(language)
+    candidates: list[str] = []
+    for text in intros.values():
+        t = (text or "").strip()
+        if t and is_usable_intro(t):
+            candidates.append(t)
+    legacy = (config.get("welcome_intro") or "").strip()
+    if legacy and is_usable_intro(legacy) and legacy not in candidates:
+        candidates.append(legacy)
+
+    for source in candidates:
+        if intro_matches_language(source, language):
+            continue
+        translated = await translate_company_intro(source, site_name, language)
+        if translated:
+            return translated
+    return ""
+
+
+async def translate_company_intro(
+    source_text: str,
+    site_name: str,
+    language: str,
+) -> str:
+    """Translate an existing welcome intro to another language."""
+    language = normalize_language_code(language)
+    try:
+        client = AsyncAnthropic(api_key=settings.anthropic_api_key)
+        response = await client.messages.create(
+            model=settings.claude_model,
+            max_tokens=900,
+            messages=[
+                {
+                    "role": "user",
+                    "content": (
+                        f"Translate the following chat widget welcome message into "
+                        f"{language_label(language)} for the site « {site_name} ».\n"
+                        "Keep the same structure, bullet points, emojis and URLs. "
+                        "Do not add or remove services.\n\n"
+                        f"{source_text.strip()}"
+                    ),
+                }
+            ],
+        )
+        text = response.content[0].text.strip()
+        if text and is_usable_intro(text) and intro_matches_language(text, language):
+            return text
+    except Exception as exc:
+        logger.warning("Welcome translation failed for %s: %s", site_name, exc)
+    return ""
 
 
 def save_composed_welcome(site_id: str, site_name: str, site_url: str, agent_config: dict) -> str:
