@@ -127,9 +127,9 @@ async def generate_company_intro(
                 {
                     "role": "user",
                     "content": (
-                        f"Libellé dashboard : {site_name}\n"
-                        f"URL du site : {site_url or 'non fournie'}\n\n"
-                        f"Contenu crawlé du site :\n{context}"
+                        f"Dashboard label: {site_name}\n"
+                        f"Site URL: {site_url or 'not provided'}\n\n"
+                        f"Crawled site content:\n{context}"
                     ),
                 }
             ],
@@ -162,11 +162,7 @@ async def ensure_welcome_intro(
     stored_lang = normalize_language_code(config.get("welcome_intro_lang") or "")
 
     cached = (intros.get(language) or "").strip()
-    if (
-        is_usable_intro(cached)
-        and (not stored_lang or stored_lang == language)
-        and intro_matches_language(cached, language)
-    ):
+    if is_usable_intro(cached) and intro_matches_language(cached, language):
         return cached
 
     legacy_intro = (config.get("welcome_intro") or "").strip()

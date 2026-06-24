@@ -111,16 +111,27 @@ async def get_widget_config(widget_key: str, lang: str | None = Query(None)):
 
     site_default_lang = normalize_language_code(config.get("language") or "fr")
     language = normalize_language_code(lang) if lang else site_default_lang
-    persist_intro = language == site_default_lang
 
-    if not config.get("welcome_customized"):
+    welcome_customized = bool(config.get("welcome_customized"))
+    base_welcome = (config.get("welcome_message") or "").strip()
+    welcome_msg_lang = normalize_language_code(config.get("welcome_message_lang") or "")
+
+    # Custom welcome in another language → auto intro for the requested language
+    if welcome_customized and base_welcome:
+        stored_msg_lang = welcome_msg_lang or site_default_lang
+        if stored_msg_lang != language or not intro_matches_language(base_welcome, language):
+            welcome_customized = False
+            base_welcome = ""
+
+    intro = ""
+    if not welcome_customized:
         intro = await ensure_welcome_intro(
             site.data["id"],
             site.data["name"],
             site_url,
             config,
             language,
-            persist=persist_intro,
+            persist=True,
         )
         if intro:
             config["welcome_intro"] = intro
@@ -131,8 +142,6 @@ async def get_widget_config(widget_key: str, lang: str | None = Query(None)):
 
     upcoming = filter_upcoming_sessions(all_sessions)
 
-    base_welcome = config.get("welcome_message") or ""
-    welcome_msg_lang = normalize_language_code(config.get("welcome_message_lang") or "")
     if welcome_msg_lang and welcome_msg_lang != language:
         base_welcome = ""
     elif base_welcome and not intro_matches_language(base_welcome, language):
@@ -143,9 +152,9 @@ async def get_widget_config(widget_key: str, lang: str | None = Query(None)):
         site.data["name"],
         all_sessions,
         profiles,
-        welcome_customized=config.get("welcome_customized", False),
+        welcome_customized=welcome_customized,
         site_url=site_url,
-        intro=config.get("welcome_intro") or "",
+        intro=intro or config.get("welcome_intro") or "",
     )
 
     contact_whatsapp = (
