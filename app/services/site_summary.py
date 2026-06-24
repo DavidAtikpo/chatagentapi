@@ -3,6 +3,7 @@ import logging
 from anthropic import AsyncAnthropic
 
 from app.config import settings
+from app.services.languages import language_label, normalize_language_code
 from app.services.rag import get_site_overview
 from app.services.site_profiles import is_cides_site
 from app.services.supabase_client import get_supabase
@@ -91,7 +92,7 @@ async def generate_company_intro(
             model=settings.claude_model,
             max_tokens=900,
             system=WELCOME_PRESENTATION_PROMPT.format(
-                language=language,
+                language=language_label(language),
                 site_name=site_name,
                 site_url=site_url or "non fournie",
             ),
@@ -121,18 +122,31 @@ async def ensure_welcome_intro(
     site_url: str,
     config: dict,
     language: str = "fr",
+    *,
+    persist: bool = True,
 ) -> str:
-    """Return stored intro or generate + persist a rich site presentation."""
+    """Return stored intro for `language` or generate + optionally persist."""
+    from app.services.languages import normalize_language_code
+
+    language = normalize_language_code(language)
+
     if is_cides_site(site_url):
         return config.get("welcome_intro") or ""
 
-    intro = config.get("welcome_intro") or ""
-    if is_usable_intro(intro):
-        return intro
+    intros: dict[str, str] = dict(config.get("welcome_intros") or {})
+    if not intros and config.get("welcome_intro"):
+        legacy_lang = normalize_language_code(
+            config.get("welcome_intro_lang") or config.get("language") or "fr"
+        )
+        intros[legacy_lang] = config["welcome_intro"]
+
+    cached = intros.get(language) or ""
+    if is_usable_intro(cached):
+        return cached
 
     intro = await generate_company_intro(site_id, site_name, language, site_url=site_url)
-    if intro:
-        _persist_intro(site_id, intro)
+    if intro and persist:
+        _persist_intro(site_id, intro, language)
     return intro
 
 
@@ -163,15 +177,23 @@ async def refresh_welcome_after_crawl(
         intro = await generate_company_intro(site_id, site_name, language, site_url=site_url)
         if intro:
             config["welcome_intro"] = intro
-            _persist_intro(site_id, intro)
+            config["welcome_intro_lang"] = normalize_language_code(language)
+            _persist_intro(site_id, intro, normalize_language_code(language))
     return save_composed_welcome(site_id, site_name, site_url, config)
 
 
-def _persist_intro(site_id: str, intro: str) -> None:
+def _persist_intro(site_id: str, intro: str, language: str) -> None:
+    from app.services.languages import normalize_language_code
+
+    language = normalize_language_code(language)
     supabase = get_supabase()
     site = supabase.table("sites").select("agent_config").eq("id", site_id).single().execute()
     config = dict(site.data.get("agent_config") or {})
+    intros = dict(config.get("welcome_intros") or {})
+    intros[language] = intro
+    config["welcome_intros"] = intros
     config["welcome_intro"] = intro
+    config["welcome_intro_lang"] = language
     supabase.table("sites").update({"agent_config": config}).eq("id", site_id).execute()
 
 
@@ -189,6 +211,9 @@ def save_welcome_message(site_id: str, welcome: str, auto_generated: bool = True
 
     config["welcome_message"] = welcome
     config["welcome_auto_generated"] = auto_generated
+    config["welcome_message_lang"] = normalize_language_code(
+        (site.data.get("agent_config") or {}).get("language") or "fr"
+    )
     supabase.table("sites").update({"agent_config": config}).eq("id", site_id).execute()
 
 

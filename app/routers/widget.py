@@ -1,6 +1,6 @@
 import httpx
 import logging
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from app.config import settings
@@ -8,6 +8,7 @@ from app.services.crawler import _extract_site_image, save_site_image
 from app.services.page_fetcher import PlaywrightSession, fetch_page_html
 from app.services.plans import has_pro_features
 from app.services.formation_context import refresh_formation_profiles
+from app.services.languages import normalize_language_code
 from app.services.session_dates import filter_upcoming_sessions
 from app.services.session_store import ensure_training_sessions
 from app.services.site_summary import DEFAULT_WELCOME, ensure_welcome_intro
@@ -75,7 +76,7 @@ class WidgetConfigResponse(BaseModel):
 
 
 @router.get("/widget/{widget_key}")
-async def get_widget_config(widget_key: str):
+async def get_widget_config(widget_key: str, lang: str | None = Query(None)):
     supabase = get_supabase()
     site = (
         supabase.table("sites")
@@ -108,7 +109,10 @@ async def get_widget_config(widget_key: str):
             config = dict(refreshed.data.get("agent_config") or {})
             profiles = config.get("formation_profiles") or []
 
-    language = config.get("language", "fr")
+    site_default_lang = normalize_language_code(config.get("language") or "fr")
+    language = normalize_language_code(lang) if lang else site_default_lang
+    persist_intro = language == site_default_lang
+
     if not config.get("welcome_customized"):
         intro = await ensure_welcome_intro(
             site.data["id"],
@@ -116,6 +120,7 @@ async def get_widget_config(widget_key: str):
             site_url,
             config,
             language,
+            persist=persist_intro,
         )
         if intro:
             config["welcome_intro"] = intro
@@ -184,7 +189,7 @@ async def get_widget_config(widget_key: str):
         logo_url=config.get("logo_url"),
         welcome_image_url=config.get("logo_url") or config.get("site_image_url") or welcome_image,
         training_sessions=upcoming,
-        language=config.get("language") or "fr",
+        language=language,
     )
 
 

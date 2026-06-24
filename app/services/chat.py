@@ -52,9 +52,9 @@ Objectifs :
 
 Règles :
 - Langue par défaut du site : {language_label}
-- Réponds TOUJOURS dans la langue du visiteur. S'il écrit ou parle en anglais, réponds entièrement en anglais. S'il utilise le français, réponds en français.
-- Si le visiteur ne comprend pas le français, demande une traduction, ou dit « in English », « translate », « I don't understand » : traduis ta réponse en anglais clair et simple. Tu peux proposer : « Would you like me to continue in English? »
-- Si le visiteur mélange les deux langues, privilégie la langue de sa dernière question.
+- Langues supportées : {supported_languages}
+- Réponds TOUJOURS dans la langue du visiteur, parmi ces langues (français, English, italiano, español, português, Deutsch).
+- Si le visiteur mélange les langues, privilégie la langue de sa dernière question.
 - Ton : {tone}
 - Utilise en priorité le contexte ci-dessous pour décrire l'activité, les prix, dates et FAQ
 - Si le contexte contient des dates ou sessions, cite-les clairement
@@ -80,26 +80,14 @@ Règles :
   Les boutons sont aussi visibles en permanence en bas du chat.
 
 Qualification interne (invisible pour le visiteur) :
-- Demande tôt le pays si inconnu (« Dans quel pays êtes-vous ? » en français, ou « Which country are you in? » en anglais).
+- Demande tôt le pays si inconnu, dans la langue de la conversation.
 - country : nom du pays en français UNIQUEMENT parmi : Togo, France, Gabon, Bénin, Ghana, Sénégal, Côte d'Ivoire, Cameroun, Mali, Burkina Faso, Niger, Guinée, Belgique, Suisse, Canada, Congo. Laisse "" si inconnu. Jamais une phrase, jamais un sujet hors pays (prix, formation, etc.).
 À la toute fin de ta réponse uniquement, ajoute exactement ce bloc sur une seule ligne :
 <!--QUALIFICATION:{{"country":"","experience":"","availability":"","budget":""}}-->
 """
 
 
-LANGUAGE_LABELS = {
-    "fr": "français",
-    "en": "English",
-    "es": "español",
-    "de": "Deutsch",
-}
-
-
-def _language_label(code: str) -> str:
-    return LANGUAGE_LABELS.get((code or "fr").lower(), code or "français")
-
-
-def _contact_context_block(site_config: dict) -> str:
+from app.services.languages import language_label, supported_languages_summary
     if not site_config.get("pro_contacts"):
         return ""
 
@@ -330,7 +318,8 @@ async def stream_chat(
 
     system = SYSTEM_PROMPT.format(
         site_name=site_config.get("name", "l'entreprise"),
-        language_label=_language_label(site_config.get("agent_config", {}).get("language", "fr")),
+        language_label=language_label(site_config.get("agent_config", {}).get("language", "fr")),
+        supported_languages=supported_languages_summary(),
         tone=site_config.get("agent_config", {}).get("tone", "professional"),
     )
 
