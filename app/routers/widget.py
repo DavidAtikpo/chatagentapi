@@ -152,7 +152,7 @@ async def get_widget_config(widget_key: str, lang: str | None = Query(None)):
             persist=True,
         )
 
-    intro_for_compose = intro.strip() if intro and intro_matches_language(intro, language) else ""
+    intro_for_compose = intro.strip() if intro else ""
 
     welcome = compose_welcome_message(
         base_welcome,

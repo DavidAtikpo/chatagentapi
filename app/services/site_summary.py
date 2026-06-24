@@ -162,16 +162,11 @@ async def ensure_welcome_intro(
     stored_lang = normalize_language_code(config.get("welcome_intro_lang") or "")
 
     cached = (intros.get(language) or "").strip()
-    if is_usable_intro(cached) and intro_matches_language(cached, language):
+    if is_usable_intro(cached):
         return cached
 
     legacy_intro = (config.get("welcome_intro") or "").strip()
-    if (
-        legacy_intro
-        and is_usable_intro(legacy_intro)
-        and stored_lang == language
-        and intro_matches_language(legacy_intro, language)
-    ):
+    if legacy_intro and is_usable_intro(legacy_intro) and stored_lang == language:
         return legacy_intro
 
     intro = await generate_company_intro(site_id, site_name, language, site_url=site_url)
@@ -180,6 +175,7 @@ async def ensure_welcome_intro(
 
     if intro and persist:
         _persist_intro(site_id, intro, language)
+    logger.info("ensure_welcome_intro[%s][%s]: len=%d", site_id, language, len(intro))
     return intro
 
 
@@ -201,7 +197,7 @@ async def _translate_intro_from_cache(
         candidates.append(legacy)
 
     for source in candidates:
-        if intro_matches_language(source, language):
+        if not is_usable_intro(source):
             continue
         translated = await translate_company_intro(source, site_name, language)
         if translated:
@@ -235,8 +231,10 @@ async def translate_company_intro(
             ],
         )
         text = response.content[0].text.strip()
-        if text and is_usable_intro(text) and intro_matches_language(text, language):
+        if text and is_usable_intro(text):
+            logger.info("translate_company_intro[%s]: translated to %s (%d chars)", site_name, language, len(text))
             return text
+        logger.warning("translate_company_intro[%s->%s]: result not usable: %r", site_name, language, text[:80])
     except Exception as exc:
         logger.warning("Welcome translation failed for %s: %s", site_name, exc)
     return ""
