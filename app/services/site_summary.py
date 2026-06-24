@@ -17,25 +17,52 @@ from app.services.welcome_compose import (
 
 logger = logging.getLogger(__name__)
 
-WELCOME_PRESENTATION_PROMPT = """Tu rédiges le message d'accueil initial d'un chat sur un site web.
-Le visiteur doit voir immédiatement ce que fait l'entreprise ou le site, sans poser de question
-(comme une réponse complète à « Qu'est-ce que vous faites ? »).
+_INTRO_LANG_MARKERS: dict[str, tuple[str, ...]] = {
+    "fr": ("bienvenue", " voici", " je suis", " nous ", " vous ", " vos ", " votre ", " tu ", " te "),
+    "en": ("welcome", " here is", " here's", " i am", " i'm", " we offer", " our ", " your ", " you "),
+    "it": ("benvenut", " ecco", " sono ", " nostr", " tuoi", " cosa "),
+    "es": ("bienvenid", " aquí", " soy ", " nuestro", " tu ", " ofrecemos"),
+    "pt": ("bem-vind", " aqui", " sou ", " nosso", " seu ", " oferecemos"),
+    "de": ("willkommen", " hier ist", " ich bin", " unser", " ihr ", " sie "),
+}
 
-Règles :
-- Base-toi UNIQUEMENT sur le contenu crawlé fourni. N'invente rien.
-- « {site_name} » est un libellé saisi dans un tableau de bord ; décris l'activité RÉELLE du site
-  d'après le contenu crawlé (pas d'après le libellé si le contenu dit autre chose).
-- Structure obligatoire :
-  1. Une phrase d'accueil chaleureuse avec 👋
-  2. Une phrase qui résume l'activité principale (nom réel du produit/service si visible dans le contenu)
-  3. Ligne vide puis « Voici ce que nous proposons : » (ou formulation équivalente)
-  4. 4 à 8 puces, UNE par ligne, chaque ligne commence par « - » (tiret espace)
-     Chaque puce = un service, produit ou fonctionnalité clé tiré du contenu
-  5. Ligne vide puis une phrase de clôture invitant à poser une question
-- Inclus l'URL du site ({site_url}) sur une ligne séparée, avec https:// complet
-- Texte simple : pas de markdown (**gras**), pas de titres #, pas de liens markdown
-- N'invente aucun prix, date, promesse ou fonctionnalité absente du contenu
-- Réponds en {language}
+
+def intro_matches_language(text: str, language: str) -> bool:
+    """Heuristic: reject cached intros stored under the wrong language key."""
+    snippet = (text or "")[:420].lower()
+    if not snippet.strip():
+        return False
+    language = normalize_language_code(language)
+    scores = {
+        lang: sum(1 for marker in markers if marker in snippet)
+        for lang, markers in _INTRO_LANG_MARKERS.items()
+    }
+    best_lang = max(scores, key=lambda code: scores[code])
+    if scores[best_lang] == 0:
+        return True
+    if scores[language] == 0 and scores[best_lang] > 0:
+        return False
+    return scores[language] >= scores[best_lang]
+
+WELCOME_PRESENTATION_PROMPT = """You write the initial welcome message for a website chat widget.
+The visitor must immediately understand what the business does, without asking a question
+(like a complete answer to "What do you do?").
+
+Rules:
+- Use ONLY the crawled content provided. Do not invent anything.
+- "{site_name}" is a dashboard label; describe the REAL activity from crawled content
+  (not from the label if content says otherwise).
+- Required structure (write ALL headings and bullets in {language}):
+  1. A warm welcome sentence with 👋
+  2. One sentence summarizing the main activity (real product/service name if visible)
+  3. Blank line then a line like "Here is what we offer:" (equivalent in {language})
+  4. 4 to 8 bullet points, ONE per line, each starting with "- " (dash space)
+     Each bullet = a key service, product or feature from the content
+  5. Blank line then a closing sentence inviting questions
+- Include the site URL ({site_url}) on its own line, with full https://
+- Plain text only: no markdown (**bold**), no # headings, no markdown links
+- Do not invent prices, dates, promises or features missing from the content
+- Write the ENTIRE message in {language}
 """
 
 
@@ -126,23 +153,30 @@ async def ensure_welcome_intro(
     persist: bool = True,
 ) -> str:
     """Return stored intro for `language` or generate + optionally persist."""
-    from app.services.languages import normalize_language_code
-
     language = normalize_language_code(language)
 
     if is_cides_site(site_url):
         return config.get("welcome_intro") or ""
 
     intros: dict[str, str] = dict(config.get("welcome_intros") or {})
-    if not intros and config.get("welcome_intro"):
-        legacy_lang = normalize_language_code(
-            config.get("welcome_intro_lang") or config.get("language") or "fr"
-        )
-        intros[legacy_lang] = config["welcome_intro"]
+    stored_lang = normalize_language_code(config.get("welcome_intro_lang") or "")
 
-    cached = intros.get(language) or ""
-    if is_usable_intro(cached):
+    cached = (intros.get(language) or "").strip()
+    if (
+        is_usable_intro(cached)
+        and (not stored_lang or stored_lang == language)
+        and intro_matches_language(cached, language)
+    ):
         return cached
+
+    legacy_intro = (config.get("welcome_intro") or "").strip()
+    if (
+        legacy_intro
+        and is_usable_intro(legacy_intro)
+        and stored_lang == language
+        and intro_matches_language(legacy_intro, language)
+    ):
+        return legacy_intro
 
     intro = await generate_company_intro(site_id, site_name, language, site_url=site_url)
     if intro and persist:

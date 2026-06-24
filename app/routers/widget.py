@@ -11,7 +11,7 @@ from app.services.formation_context import refresh_formation_profiles
 from app.services.languages import normalize_language_code
 from app.services.session_dates import filter_upcoming_sessions
 from app.services.session_store import ensure_training_sessions
-from app.services.site_summary import DEFAULT_WELCOME, ensure_welcome_intro
+from app.services.site_summary import DEFAULT_WELCOME, ensure_welcome_intro, intro_matches_language
 from app.services.welcome_compose import compose_welcome_message
 from app.services.traffic_links import record_traffic_link_visit
 from app.services.country_utils import country_from_request
@@ -130,8 +130,16 @@ async def get_widget_config(widget_key: str, lang: str | None = Query(None)):
         config["site_image_url"] = welcome_image
 
     upcoming = filter_upcoming_sessions(all_sessions)
+
+    base_welcome = config.get("welcome_message") or ""
+    welcome_msg_lang = normalize_language_code(config.get("welcome_message_lang") or "")
+    if welcome_msg_lang and welcome_msg_lang != language:
+        base_welcome = ""
+    elif base_welcome and not intro_matches_language(base_welcome, language):
+        base_welcome = ""
+
     welcome = compose_welcome_message(
-        config.get("welcome_message") or "",
+        base_welcome,
         site.data["name"],
         all_sessions,
         profiles,
