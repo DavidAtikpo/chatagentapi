@@ -86,6 +86,8 @@ async def chat(payload: ChatRequest, request: Request):
         )
         if link.data:
             traffic_link_id = link.data[0]["id"]
+
+    conversation_id = payload.conversation_id
     if not conversation_id:
         new_conv: dict = {
             "site_id": site_id,
