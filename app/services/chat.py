@@ -88,6 +88,9 @@ Qualification interne (invisible pour le visiteur) :
 
 
 from app.services.languages import language_label, supported_languages_summary
+
+
+def _contact_context_block(site_config: dict) -> str:
     if not site_config.get("pro_contacts"):
         return ""
 
