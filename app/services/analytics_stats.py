@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
 from app.services.supabase_client import get_supabase
+
+logger = logging.getLogger(__name__)
 
 CLICK_TYPES = ("whatsapp", "phone", "email", "signup", "session", "link")
 
@@ -266,22 +269,40 @@ def fetch_tracked_links_analytics(site_ids: list[str]) -> list[dict]:
     month_labels = dict(month_range)
     year_ago = (datetime.now(timezone.utc) - timedelta(days=365)).isoformat()
 
-    links = (
-        supabase.table("traffic_links")
-        .select("id, slug, source, label, click_count, site_id, sites(name, agent_config)")
-        .in_("site_id", site_ids)
-        .order("click_count", desc=True)
-        .execute()
-    )
+    try:
+        links = (
+            supabase.table("traffic_links")
+            .select("id, slug, source, label, click_count, site_id, sites(name, agent_config)")
+            .in_("site_id", site_ids)
+            .order("click_count", desc=True)
+            .execute()
+        )
+    except Exception:
+        logger.warning("traffic_links join query failed, retrying without join", exc_info=True)
+        try:
+            links = (
+                supabase.table("traffic_links")
+                .select("id, slug, source, label, click_count, site_id")
+                .in_("site_id", site_ids)
+                .order("click_count", desc=True)
+                .execute()
+            )
+        except Exception:
+            logger.warning("traffic_links fallback query also failed", exc_info=True)
+            return []
 
-    convs = (
-        supabase.table("conversations")
-        .select("id, traffic_link_id, created_at")
-        .in_("site_id", site_ids)
-        .not_.is_("traffic_link_id", "null")
-        .gte("created_at", year_ago)
-        .execute()
-    )
+    try:
+        convs = (
+            supabase.table("conversations")
+            .select("id, traffic_link_id, created_at")
+            .in_("site_id", site_ids)
+            .not_.is_("traffic_link_id", "null")
+            .gte("created_at", year_ago)
+            .execute()
+        )
+    except Exception:
+        logger.warning("conversations for tracked links query failed", exc_info=True)
+        convs = type("_R", (), {"data": []})()  # empty result
 
     convs_by_link: dict[str, list[dict]] = defaultdict(list)
     for c in convs.data or []:

@@ -35,7 +35,11 @@ class DeviceTokenRequest(BaseModel):
 @router.get("/owner-stats")
 async def owner_stats(agent: AgentUser = Depends(get_current_agent)):
     """Tableau de bord mobile — réservé au propriétaire du compte."""
-    data = fetch_owner_stats(agent.user_id)
+    try:
+        data = fetch_owner_stats(agent.user_id)
+    except Exception as exc:
+        logger.exception("fetch_owner_stats failed for user %s", agent.user_id)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
     if not data:
         raise HTTPException(
             status_code=403,

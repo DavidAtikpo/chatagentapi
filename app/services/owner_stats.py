@@ -1,11 +1,14 @@
 """Statistiques dashboard — 1 organisation, tous les sites agrégés."""
 
+import logging
 from collections import Counter
 
 from app.services.analytics_stats import fetch_embed_analytics, fetch_tracked_links_analytics
 from app.services.traffic_links import collect_tracked_visit_countries
 from app.services.country_utils import normalize_country
 from app.services.supabase_client import get_supabase
+
+logger = logging.getLogger(__name__)
 
 SOURCE_LABELS = {
     "facebook": "Facebook",
@@ -77,55 +80,83 @@ def fetch_owner_stats(user_id: str) -> dict | None:
         conv_count += n
         site_summaries.append({"id": site["id"], "name": site["name"], "conversations": n})
 
-    leads = (
-        supabase.table("leads")
-        .select("id", count="exact")
-        .in_("organization_id", org_ids)
-        .execute()
-    )
+    leads_count = 0
+    try:
+        leads = (
+            supabase.table("leads")
+            .select("id", count="exact")
+            .in_("organization_id", org_ids)
+            .execute()
+        )
+        leads_count = leads.count or 0
+    except Exception:
+        logger.warning("leads count query failed (organization_id column may be missing)")
+        try:
+            leads = (
+                supabase.table("leads")
+                .select("id", count="exact")
+                .in_("site_id", site_ids)
+                .execute()
+            )
+            leads_count = leads.count or 0
+        except Exception:
+            logger.warning("leads count fallback query also failed")
 
     tracked_links: list[dict] = []
     if site_ids:
-        tracked_links = fetch_tracked_links_analytics(site_ids)
+        try:
+            tracked_links = fetch_tracked_links_analytics(site_ids)
+        except Exception:
+            logger.warning("fetch_tracked_links_analytics failed", exc_info=True)
 
-    embed = fetch_embed_analytics(site_ids) if site_ids else {
-        "totals": {"opens": 0, "conversations": 0, "visitor_messages": 0, "clicks": []},
-        "daily": [],
-        "monthly": [],
-    }
+    embed = {"totals": {"opens": 0, "conversations": 0, "visitor_messages": 0, "clicks": []}, "daily": [], "monthly": []}
+    if site_ids:
+        try:
+            embed = fetch_embed_analytics(site_ids)
+        except Exception:
+            logger.warning("fetch_embed_analytics failed", exc_info=True)
 
     countries_raw: list[str] = []
     if site_ids:
-        convs = (
-            supabase.table("conversations")
-            .select("qualification_data")
-            .in_("site_id", site_ids)
-            .not_.is_("qualification_data", "null")
-            .execute()
-        )
-        for row in convs.data or []:
-            c = _country_from_qualification(row.get("qualification_data"))
-            if c:
-                countries_raw.append(c)
+        try:
+            convs = (
+                supabase.table("conversations")
+                .select("qualification_data")
+                .in_("site_id", site_ids)
+                .not_.is_("qualification_data", "null")
+                .execute()
+            )
+            for row in convs.data or []:
+                c = _country_from_qualification(row.get("qualification_data"))
+                if c:
+                    countries_raw.append(c)
+        except Exception:
+            logger.warning("qualification_data country query failed", exc_info=True)
 
-        lead_rows = (
-            supabase.table("leads")
-            .select("country")
-            .in_("site_id", site_ids)
-            .not_.is_("country", "null")
-            .execute()
-        )
-        for row in lead_rows.data or []:
-            c = normalize_country(row.get("country"))
-            if c:
-                countries_raw.append(c)
+        try:
+            lead_rows = (
+                supabase.table("leads")
+                .select("country")
+                .in_("site_id", site_ids)
+                .not_.is_("country", "null")
+                .execute()
+            )
+            for row in lead_rows.data or []:
+                c = normalize_country(row.get("country"))
+                if c:
+                    countries_raw.append(c)
+        except Exception:
+            logger.warning("leads country query failed", exc_info=True)
 
-        countries_raw.extend(collect_tracked_visit_countries(site_ids))
+        try:
+            countries_raw.extend(collect_tracked_visit_countries(site_ids))
+        except Exception:
+            logger.warning("collect_tracked_visit_countries failed", exc_info=True)
 
     return {
         "organization_name": org_name,
         "conversations": conv_count,
-        "leads": leads.count or 0,
+        "leads": leads_count,
         "tracked_links": tracked_links,
         "embed": embed,
         "countries": _aggregate_countries(countries_raw),
