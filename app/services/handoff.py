@@ -5,7 +5,7 @@ import logging
 import re
 from datetime import datetime, timezone
 
-from postgrest.exceptions import APIError
+from app.services.db_errors import APIError
 
 from app.services.supabase_client import get_supabase
 
@@ -166,7 +166,7 @@ def request_handoff(
             "organization_id": organization_id,
             "type": "handoff_request",
             "title": f"🙋 {label}",
-            "body": f"Conversation sur {site_name} — répondez depuis l'app mobile",
+            "body": f"Conversation sur {site_name} — répondez depuis la Boîte conseiller (web) ou l'app mobile",
             "data": {
                 "conversation_id": conversation_id,
                 "reason": reason,
@@ -182,7 +182,7 @@ def request_handoff(
         "conversation_id": conversation_id,
         "reason": reason,
         "title": f"🙋 {label}",
-        "body": f"Conversation sur {site_name} — ouvrez l'app conseiller",
+        "body": f"Conversation sur {site_name} — Boîte conseiller (web) ou app mobile",
     }
 
 

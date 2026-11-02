@@ -2,15 +2,10 @@ import stripe
 from fastapi import APIRouter, HTTPException, Request
 
 from app.config import settings
+from app.services.billing_plans import plan_from_amount_cents, plan_from_metadata
 from app.services.supabase_client import get_supabase
 
 router = APIRouter()
-
-PLAN_MAP = {
-    "price_starter": "starter",
-    "price_pro": "pro",
-    "price_agency": "agency",
-}
 
 
 @router.post("/webhooks/stripe")
@@ -29,12 +24,34 @@ async def stripe_webhook(request: Request):
 
     supabase = get_supabase()
 
+    if event["type"] == "checkout.session.completed":
+        session = event["data"]["object"]
+        org_id = (session.get("metadata") or {}).get("organization_id")
+        plan = plan_from_metadata(session.get("metadata"))
+        customer_id = session.get("customer")
+        sub_id = session.get("subscription")
+        if org_id and plan and customer_id:
+            supabase.table("organizations").update(
+                {
+                    "subscription_plan": plan,
+                    "subscription_status": "active",
+                    "stripe_customer_id": customer_id,
+                    "stripe_subscription_id": sub_id,
+                }
+            ).eq("id", org_id).execute()
+
     if event["type"] == "customer.subscription.updated":
         sub = event["data"]["object"]
         customer_id = sub["customer"]
         status = sub["status"]
-        price_id = sub["items"]["data"][0]["price"]["id"] if sub["items"]["data"] else None
-        plan = PLAN_MAP.get(price_id, "starter")
+        plan = plan_from_metadata(sub.get("metadata"))
+        if not plan and sub["items"]["data"]:
+            price = sub["items"]["data"][0].get("price") or {}
+            plan = plan_from_metadata(price.get("metadata"))
+            if not plan:
+                plan = plan_from_amount_cents(price.get("unit_amount") or 0)
+        if not plan:
+            plan = "starter"
 
         supabase.table("organizations").update(
             {
@@ -46,8 +63,12 @@ async def stripe_webhook(request: Request):
 
     elif event["type"] == "customer.subscription.deleted":
         sub = event["data"]["object"]
-        supabase.table("organizations").update({"subscription_status": "canceled"}).eq(
-            "stripe_customer_id", sub["customer"]
-        ).execute()
+        supabase.table("organizations").update(
+            {
+                "subscription_status": "canceled",
+                "subscription_plan": "free",
+                "stripe_subscription_id": None,
+            }
+        ).eq("stripe_customer_id", sub["customer"]).execute()
 
     return {"received": True}

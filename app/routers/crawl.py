@@ -22,6 +22,7 @@ from app.services.site_summary import (
     refresh_welcome_after_crawl,
     save_composed_welcome,
 )
+from app.services.knowledge_ingest import ingest_document_from_url, ingest_manual_description
 from app.services.supabase_client import get_supabase
 
 router = APIRouter()
@@ -30,6 +31,17 @@ logger = logging.getLogger(__name__)
 
 class CrawlRequest(BaseModel):
     site_id: str
+
+
+class ManualIngestRequest(BaseModel):
+    site_id: str
+    text: str
+    title: str | None = None
+
+
+class DocumentIngestRequest(BaseModel):
+    site_id: str
+    document_id: str
 
 
 class CrawlFromUrlRequest(BaseModel):
@@ -183,6 +195,66 @@ async def refresh_sessions(site_id: str):
     }
 
 
+@router.post("/ingest/document")
+async def ingest_document(payload: DocumentIngestRequest):
+    supabase = get_supabase()
+    doc = (
+        supabase.table("site_documents")
+        .select("id, site_id, filename, mime_type, cloudinary_url, status")
+        .eq("id", payload.document_id)
+        .eq("site_id", payload.site_id)
+        .single()
+        .execute()
+    )
+    if not doc.data:
+        raise HTTPException(status_code=404, detail="Document not found")
+    row = doc.data
+    url = row.get("cloudinary_url")
+    if not url:
+        raise HTTPException(status_code=400, detail="URL Cloudinary manquante")
+    title = row.get("filename") or "Document"
+    try:
+        embedded = await ingest_document_from_url(
+            payload.site_id,
+            payload.document_id,
+            url,
+            title,
+            filename=row.get("filename") or title,
+            mime_type=row.get("mime_type") or "",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Document ingest failed doc=%s", payload.document_id)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return {"status": "completed", "document_id": payload.document_id, "embeddings": embedded}
+
+
+@router.post("/ingest/manual")
+async def ingest_manual(payload: ManualIngestRequest, background_tasks: BackgroundTasks):
+    supabase = get_supabase()
+    site = supabase.table("sites").select("id").eq("id", payload.site_id).single().execute()
+    if not site.data:
+        raise HTTPException(status_code=404, detail="Site not found")
+    try:
+        embedded = await ingest_manual_description(
+            payload.site_id,
+            payload.text,
+            title=payload.title or "Description de l'activité",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    site_row = supabase.table("sites").select("agent_config").eq("id", payload.site_id).single().execute()
+    cfg = (site_row.data or {}).get("agent_config") or {}
+    if cfg.get("profile_type") in ("shop", "job_search", "other"):
+        from app.services.profile_compose import compose_profile_presentation
+
+        background_tasks.add_task(compose_profile_presentation, payload.site_id, force=True)
+
+    return {"status": "completed", "site_id": payload.site_id, "embeddings": embedded}
+
+
 @router.post("/crawl")
 async def trigger_crawl(payload: CrawlRequest, background_tasks: BackgroundTasks):
     supabase = get_supabase()
@@ -190,8 +262,12 @@ async def trigger_crawl(payload: CrawlRequest, background_tasks: BackgroundTasks
     if not site.data:
         raise HTTPException(status_code=404, detail="Site not found")
 
-    logger.info("Requête crawl reçue — site_id=%s url=%s", payload.site_id, site.data["url"])
-    background_tasks.add_task(_crawl_and_embed, site.data["id"], site.data["url"])
+    url = (site.data.get("url") or "").strip()
+    if not url:
+        raise HTTPException(status_code=400, detail="Ce site n'a pas d'URL — utilisez l'ingestion manuelle")
+
+    logger.info("Requête crawl reçue — site_id=%s url=%s", payload.site_id, url)
+    background_tasks.add_task(_crawl_and_embed, site.data["id"], url)
     return {"status": "started", "site_id": payload.site_id}
 
 

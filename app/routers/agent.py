@@ -1,11 +1,13 @@
 """API agent mobile — inbox, réponses humaines, handoff."""
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
+from jose import jwt
 from pydantic import BaseModel, Field
 
+from app.config import settings
 from app.services.auth import (
     AgentUser,
     assert_agent_can_access_conversation,
@@ -17,10 +19,65 @@ from app.services.auth import (
 )
 from app.services.handoff import claim_handoff, insert_human_message, release_handoff
 from app.services.owner_stats import fetch_owner_stats
+from app.services.auth_password import hash_password, password_needs_upgrade, verify_password
 from app.services.supabase_client import get_supabase
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/agent", tags=["agent"])
+
+
+class AgentLoginRequest(BaseModel):
+    email: str = Field(min_length=3)
+    password: str = Field(min_length=1)
+
+
+@router.post("/auth/login")
+async def agent_login(body: AgentLoginRequest):
+    email = body.email.strip().lower()
+    supabase = get_supabase()
+    user_row = (
+        supabase.table("app_users")
+        .select("id, email, password_hash")
+        .eq("email", email)
+        .maybe_single()
+        .execute()
+    )
+    stored_hash = user_row.data.get("password_hash") if user_row.data else None
+    if not user_row.data or not verify_password(body.password, stored_hash):
+        raise HTTPException(status_code=401, detail="Identifiants incorrects")
+
+    user_id = str(user_row.data["id"])
+    if password_needs_upgrade(stored_hash):
+        supabase.table("app_users").update({"password_hash": hash_password(body.password)}).eq(
+            "id", user_id
+        ).execute()
+    members = _member_rows_for_user(user_id)
+    owned = (
+        supabase.table("organizations")
+        .select("id")
+        .eq("owner_id", user_id)
+        .limit(1)
+        .execute()
+    )
+    if not members and not (owned.data or []):
+        raise HTTPException(status_code=403, detail="Compte sans accès conseiller")
+
+    secret = settings.auth_jwt_secret
+    if not secret:
+        raise HTTPException(status_code=500, detail="AUTH_SECRET non configuré")
+
+    expires = datetime.utcnow() + timedelta(days=30)
+    access_token = jwt.encode(
+        {"sub": user_id, "email": user_row.data["email"], "exp": expires},
+        secret,
+        algorithm="HS256",
+    )
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "user_id": user_id,
+        "email": user_row.data["email"],
+    }
 
 
 class AgentMessageRequest(BaseModel):

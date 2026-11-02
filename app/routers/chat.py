@@ -30,7 +30,7 @@ async def chat(payload: ChatRequest, request: Request):
     ip_country = country_from_request(request)
     site = (
         supabase.table("sites")
-        .select("id, name, url, agent_config, organization_id, is_active, whatsapp_number")
+        .select("id, name, url, agent_config, organization_id, is_active, whatsapp_number, business_description")
         .eq("widget_key", payload.widget_key)
         .single()
         .execute()
@@ -66,7 +66,6 @@ async def chat(payload: ChatRequest, request: Request):
                 {
                     "site_id": site_id,
                     "fingerprint": payload.visitor_fingerprint,
-                    "last_seen_at": "now()",
                 },
                 on_conflict="site_id,fingerprint",
             )
@@ -126,9 +125,12 @@ async def chat(payload: ChatRequest, request: Request):
                 "event": "token",
                 "data": "Désolé, une erreur est survenue. Réessayez dans un instant.",
             }
-        hs = (get_conversation_handoff(conversation_id) or {}).get("handoff_status", "none")
-        if hs in ("requested", "active"):
-            yield {"event": "handoff", "data": hs}
+        try:
+            hs = (get_conversation_handoff(conversation_id) or {}).get("handoff_status", "none")
+            if hs in ("requested", "active"):
+                yield {"event": "handoff", "data": hs}
+        except Exception:
+            logger.exception("Handoff status check failed for conversation %s", conversation_id)
         yield {"event": "done", "data": conversation_id}
 
     return EventSourceResponse(event_generator())

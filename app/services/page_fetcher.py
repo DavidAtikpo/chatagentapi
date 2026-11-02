@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 from dataclasses import dataclass
 from typing import Literal
 
@@ -104,6 +105,11 @@ class PlaywrightSession:
             )
         except Exception as exc:
             self.launch_error = str(exc) or type(exc).__name__
+            if isinstance(exc, NotImplementedError) and sys.platform == "win32":
+                self.launch_error = (
+                    "Sous Windows, Playwright exige WindowsProactorEventLoopPolicy "
+                    "(voir app/main.py) — redémarrez l'API après mise à jour."
+                )
             logger.warning("Impossible de lancer Chromium Playwright : %s", self.launch_error)
             self._disabled = True
 

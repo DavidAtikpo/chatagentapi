@@ -1,12 +1,14 @@
-"""Vérification JWT Supabase pour l'app mobile agent."""
+"""JWT agent (login mobile + même AUTH_SECRET que le dashboard web)."""
 
 import logging
 from dataclasses import dataclass
 
 from fastapi import Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from postgrest.exceptions import APIError
+from jose import JWTError, jwt
+from app.services.db_errors import APIError
 
+from app.config import settings
 from app.services.supabase_client import get_supabase
 
 logger = logging.getLogger(__name__)
@@ -20,18 +22,20 @@ class AgentUser:
 
 
 def _verify_agent_token(token: str) -> AgentUser:
-    """Valide le token via Supabase Auth (utilise SUPABASE_SERVICE_KEY déjà configurée)."""
-    supabase = get_supabase()
+    secret = settings.auth_jwt_secret
+    if not secret:
+        raise HTTPException(status_code=500, detail="AUTH_SECRET non configuré")
     try:
-        response = supabase.auth.get_user(token)
-    except Exception as exc:
-        logger.warning("Supabase get_user failed: %s", exc)
+        payload = jwt.decode(token, secret, algorithms=["HS256"])
+    except JWTError as exc:
+        logger.warning("JWT decode failed: %s", exc)
         raise HTTPException(status_code=401, detail="Invalid or expired token") from exc
 
-    user = getattr(response, "user", None)
-    if not user or not getattr(user, "id", None):
+    user_id = payload.get("sub")
+    if not user_id:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
-    return AgentUser(user_id=str(user.id), email=getattr(user, "email", None))
+    email = payload.get("email")
+    return AgentUser(user_id=str(user_id), email=str(email) if email else None)
 
 
 async def get_current_agent(

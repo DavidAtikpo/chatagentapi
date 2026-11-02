@@ -18,6 +18,7 @@ from app.services.session_extractor import (
     extract_sessions_from_html,
     formation_page_urls,
 )
+from app.services.knowledge_ingest import delete_web_knowledge_chunks
 from app.services.supabase_client import get_supabase
 from app.services.text_quality import is_readable_text, should_skip_crawl_url
 
@@ -130,7 +131,7 @@ async def crawl_site(site_id: str, start_url: str, max_pages: int = 30) -> dict:
     supabase = get_supabase()
     clear_crawl_error(site_id)
     supabase.table("sites").update({"crawl_status": "running"}).eq("id", site_id).execute()
-    supabase.table("knowledge_chunks").delete().eq("site_id", site_id).execute()
+    delete_web_knowledge_chunks(site_id)
     supabase.table("crawled_pages").delete().eq("site_id", site_id).execute()
     init_progress(site_id, max_pages)
 

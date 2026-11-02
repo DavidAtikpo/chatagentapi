@@ -330,8 +330,14 @@ async def stream_chat(
     formation_profiles = agent_config.get("formation_profiles") or []
     matched_profiles = match_formation_profiles(formation_profiles, user_message)
 
+    manual_desc = (site_config.get("business_description") or "").strip()
+    if manual_desc and not context:
+        system += f"\n\nFiche activité (saisie manuelle par le commerçant) :\n{manual_desc[:3000]}"
+    elif manual_desc:
+        system += f"\n\nComplément fiche activité (saisie manuelle) :\n{manual_desc[:1500]}"
+
     if context:
-        system += f"\n\nContexte entreprise (source : site web crawlé) :\n{context}"
+        system += f"\n\nContexte entreprise (site web, description manuelle et documents indexés) :\n{context}"
     elif not matched_profiles:
         system += (
             "\n\nAucun extrait du site n'a été trouvé pour cette question. "

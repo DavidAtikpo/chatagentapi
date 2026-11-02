@@ -6,20 +6,55 @@ from pydantic import BaseModel
 from app.config import settings
 from app.services.crawler import _extract_site_image, save_site_image
 from app.services.page_fetcher import PlaywrightSession, fetch_page_html
-from app.services.plans import has_pro_features
+from app.services.plans import has_pro_features, has_pro_profile_features, has_starter_features
 from app.services.formation_context import refresh_formation_profiles
 from app.services.languages import normalize_language_code
 from app.services.session_dates import filter_upcoming_sessions
 from app.services.session_store import ensure_training_sessions
-from app.services.site_summary import DEFAULT_WELCOME, ensure_welcome_intro, intro_matches_language
-from app.services.welcome_compose import compose_welcome_message, is_generic_welcome
+from app.services.site_summary import (
+    ensure_welcome_intro,
+    intro_matches_language,
+    knowledge_fallback_intro,
+)
+from app.services.text_quality import is_readable_text
+from app.services.welcome_compose import (
+    DEFAULT_WELCOME,
+    compose_welcome_message,
+    is_generic_welcome,
+    is_usable_intro,
+)
 from app.services.traffic_links import record_traffic_link_visit
 from app.services.country_utils import country_from_request
+from app.services.branding import default_assistant_avatar_url
+from app.services.site_expiry import apply_event_expiry
 from app.services.supabase_client import get_supabase
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _org_subscription(supabase, org_id: str | None) -> tuple[str, str]:
+    if not org_id:
+        return "free", ""
+    org = (
+        supabase.table("organizations")
+        .select("subscription_plan, subscription_status")
+        .eq("id", org_id)
+        .single()
+        .execute()
+    )
+    if org.data:
+        return (
+            org.data.get("subscription_plan") or "free",
+            org.data.get("subscription_status") or "",
+        )
+    return "free", ""
+
+
+def _apply_plan_limits_on_config(config: dict, subscription_plan: str, subscription_status: str) -> None:
+    if not has_starter_features(subscription_plan, subscription_status):
+        config.pop("logo_url", None)
 
 
 async def ensure_site_image(site_id: str, site_url: str, config: dict) -> str | None:
@@ -70,33 +105,62 @@ class WidgetConfigResponse(BaseModel):
     header_title_color: str = "#ffffff"
     header_font: str = "system-ui, -apple-system, sans-serif"
     logo_url: str | None = None
+    assistant_avatar_url: str | None = None
     welcome_image_url: str | None = None
     training_sessions: list[TrainingSession] = []
     language: str = "fr"
 
 
 @router.get("/widget/{widget_key}")
-async def get_widget_config(widget_key: str, lang: str | None = Query(None)):
+async def get_widget_config(
+    widget_key: str,
+    lang: str | None = Query(None),
+    traffic_slug: str | None = Query(None),
+):
     supabase = get_supabase()
     site = (
         supabase.table("sites")
-        .select("id, name, url, agent_config, whatsapp_number, is_active, organization_id")
+        .select(
+            "id, name, url, agent_config, whatsapp_number, is_active, organization_id, business_description"
+        )
         .eq("widget_key", widget_key)
         .single()
         .execute()
     )
-    if not site.data or not site.data.get("is_active"):
+    if not site.data:
         raise HTTPException(status_code=404, detail="Widget not found")
 
     config = dict(site.data.get("agent_config") or {})
-    site_url = site.data.get("url") or ""
+    if not apply_event_expiry(supabase, site.data["id"], config, bool(site.data.get("is_active"))):
+        raise HTTPException(status_code=404, detail="Widget not found")
+    if not site.data.get("is_active"):
+        raise HTTPException(status_code=404, detail="Widget not found")
 
-    all_sessions = await ensure_training_sessions(site.data["id"], site_url, config)
-    if all_sessions:
-        config["training_sessions"] = all_sessions
+    org_id = site.data.get("organization_id")
+    subscription_plan, subscription_status = _org_subscription(supabase, org_id)
+    profile_type = config.get("profile_type") or "website"
+    if profile_type in ("shop", "job_search", "other") and not has_pro_profile_features(
+        subscription_plan, subscription_status
+    ):
+        raise HTTPException(status_code=404, detail="Widget not found")
+    if not has_starter_features(subscription_plan, subscription_status) and not (
+        traffic_slug or ""
+    ).strip():
+        raise HTTPException(status_code=403, detail="embed_requires_starter")
+
+    _apply_plan_limits_on_config(config, subscription_plan, subscription_status)
+    site_url = site.data.get("url") or ""
+    traffic_open = bool((traffic_slug or "").strip())
+
+    if traffic_open:
+        all_sessions = config.get("training_sessions") or []
+    else:
+        all_sessions = await ensure_training_sessions(site.data["id"], site_url, config)
+        if all_sessions:
+            config["training_sessions"] = all_sessions
 
     profiles = config.get("formation_profiles") or []
-    if not profiles and site_url:
+    if not traffic_open and not profiles and site_url:
         count = refresh_formation_profiles(site.data["id"])
         if count:
             refreshed = (
@@ -111,6 +175,65 @@ async def get_widget_config(widget_key: str, lang: str | None = Query(None)):
 
     site_default_lang = normalize_language_code(config.get("language") or "fr")
     language = normalize_language_code(lang) if lang else site_default_lang
+
+    profile_type = config.get("profile_type") or ""
+    public_presentation = (config.get("public_presentation") or "").strip()
+    if profile_type in ("shop", "job_search", "other") and public_presentation:
+        if is_readable_text(public_presentation, min_len=40):
+            welcome_image = config.get("logo_url") or config.get("site_image_url")
+            if not welcome_image and not traffic_open:
+                welcome_image = await ensure_site_image(site.data["id"], site_url, config)
+            assistant_avatar = (
+                config.get("assistant_avatar_url")
+                or default_assistant_avatar_url(settings.app_url)
+            )
+            contact_whatsapp = site.data.get("whatsapp_number") or config.get("contact_whatsapp")
+            contact_phone = config.get("contact_phone")
+            contact_email = config.get("contact_email")
+            pro_contacts = False
+            org_id = site.data.get("organization_id")
+            if org_id:
+                org = (
+                    supabase.table("organizations")
+                    .select("subscription_plan, subscription_status")
+                    .eq("id", org_id)
+                    .single()
+                    .execute()
+                )
+                if org.data:
+                    pro_contacts = has_pro_features(
+                        org.data.get("subscription_plan"),
+                        org.data.get("subscription_status"),
+                    )
+            if not pro_contacts:
+                contact_whatsapp = None
+                contact_phone = None
+                contact_email = None
+                cta_url = None
+            else:
+                cta_url = config.get("cta_url")
+            return WidgetConfigResponse(
+                site_id=site.data["id"],
+                name=site.data["name"],
+                site_url=site_url,
+                welcome_message=public_presentation,
+                api_url=settings.api_url,
+                cta_url=cta_url if pro_contacts else None,
+                cta_label=config.get("cta_label", "S'inscrire"),
+                whatsapp_number=contact_whatsapp if pro_contacts else None,
+                contact_phone=contact_phone if pro_contacts else None,
+                contact_email=contact_email if pro_contacts else None,
+                primary_color=config.get("primary_color") or "#C9922A",
+                header_title_color=config.get("header_title_color") or "#ffffff",
+                header_font=config.get("header_font") or "system-ui, -apple-system, sans-serif",
+                logo_url=config.get("logo_url"),
+                assistant_avatar_url=assistant_avatar,
+                welcome_image_url=config.get("logo_url")
+                or config.get("site_image_url")
+                or welcome_image,
+                training_sessions=[],
+                language=language,
+            )
 
     welcome_customized = bool(config.get("welcome_customized"))
     base_welcome = (config.get("welcome_message") or "").strip()
@@ -130,9 +253,11 @@ async def get_widget_config(widget_key: str, lang: str | None = Query(None)):
     if not welcome_customized:
         base_welcome = ""
 
-    welcome_image = await ensure_site_image(site.data["id"], site_url, config)
-    if welcome_image and not config.get("site_image_url") and not config.get("logo_url"):
-        config["site_image_url"] = welcome_image
+    welcome_image = config.get("logo_url") or config.get("site_image_url")
+    if not welcome_image and not traffic_open:
+        welcome_image = await ensure_site_image(site.data["id"], site_url, config)
+        if welcome_image and not config.get("site_image_url") and not config.get("logo_url"):
+            config["site_image_url"] = welcome_image
 
     upcoming = filter_upcoming_sessions(all_sessions)
 
@@ -142,15 +267,25 @@ async def get_widget_config(widget_key: str, lang: str | None = Query(None)):
         base_welcome = ""
 
     intro = ""
+    business_description = (site.data.get("business_description") or "").strip()
     if not welcome_customized:
-        intro = await ensure_welcome_intro(
-            site.data["id"],
-            site.data["name"],
-            site_url,
-            config,
-            language,
-            persist=True,
-        )
+        if traffic_open:
+            intros = dict(config.get("welcome_intros") or {})
+            intro = (intros.get(language) or config.get("welcome_intro") or "").strip()
+            if not is_usable_intro(intro):
+                intro = knowledge_fallback_intro(
+                    site.data["id"], business_description, language
+                )
+        else:
+            intro = await ensure_welcome_intro(
+                site.data["id"],
+                site.data["name"],
+                site_url,
+                config,
+                language,
+                persist=True,
+                business_description=business_description,
+            )
 
     intro_for_compose = intro.strip() if intro else ""
 
@@ -163,7 +298,12 @@ async def get_widget_config(widget_key: str, lang: str | None = Query(None)):
         site_url=site_url,
         intro=intro_for_compose,
         language=language,
+        business_description=business_description,
+        stored_welcome=(config.get("welcome_message") or "").strip(),
+        welcome_auto_generated=bool(config.get("welcome_auto_generated")),
     )
+    if not is_readable_text((welcome or "").strip(), min_len=20):
+        welcome = DEFAULT_WELCOME
 
     contact_whatsapp = (
         site.data.get("whatsapp_number")
@@ -197,6 +337,11 @@ async def get_widget_config(widget_key: str, lang: str | None = Query(None)):
         contact_email = config.get("contact_email")
         cta_url = config.get("cta_url")
 
+    assistant_avatar = (
+        config.get("assistant_avatar_url")
+        or default_assistant_avatar_url(settings.app_url)
+    )
+
     return WidgetConfigResponse(
         site_id=site.data["id"],
         name=site.data["name"],
@@ -212,6 +357,7 @@ async def get_widget_config(widget_key: str, lang: str | None = Query(None)):
         header_title_color=config.get("header_title_color") or "#ffffff",
         header_font=config.get("header_font") or "system-ui, -apple-system, sans-serif",
         logo_url=config.get("logo_url"),
+        assistant_avatar_url=assistant_avatar,
         welcome_image_url=config.get("logo_url") or config.get("site_image_url") or welcome_image,
         training_sessions=upcoming,
         language=language,

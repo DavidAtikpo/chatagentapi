@@ -8,7 +8,7 @@ import httpx
 from google.auth.transport.requests import Request
 from google.oauth2 import service_account
 
-from postgrest.exceptions import APIError
+from app.services.db_errors import APIError
 
 from app.config import settings
 from app.services.supabase_client import get_supabase

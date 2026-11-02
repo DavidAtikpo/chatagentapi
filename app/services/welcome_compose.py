@@ -266,6 +266,7 @@ def build_generic_welcome(
     sessions: list[dict[str, Any]],
     site_url: str = "",
     language: str = "fr",
+    business_description: str = "",
 ) -> str:
     """Welcome for any (non-branded) client, built from their own site only."""
     from app.services.languages import normalize_language_code
@@ -280,6 +281,10 @@ def build_generic_welcome(
         parts = [hello]
         if site_url:
             parts.append(f"{site_url}")
+        manual = (business_description or "").strip()
+        if manual and is_readable_text(manual, min_len=30):
+            parts.append("")
+            parts.append(manual[:1200])
         parts.append("")
         parts.append(question)
 
@@ -307,6 +312,9 @@ def compose_welcome_message(
     site_url: str = "",
     intro: str = "",
     language: str = "fr",
+    business_description: str = "",
+    stored_welcome: str = "",
+    welcome_auto_generated: bool = False,
 ) -> str:
     from app.services.site_profiles import is_cides_site
 
@@ -318,12 +326,21 @@ def compose_welcome_message(
     if is_cides_site(site_url):
         return build_full_welcome(site_name, sessions, formation_profiles)
 
-    # Auto mode: use generated intro only (never a stale welcome_message).
     content_intro = (intro or "").strip()
+    if not is_usable_intro(content_intro):
+        cached = (stored_welcome or "").strip()
+        if (
+            welcome_auto_generated
+            and not is_generic_welcome(cached)
+            and is_readable_text(cached, min_len=80)
+        ):
+            return cached
+
     return build_generic_welcome(
         site_name,
         content_intro,
         sessions,
         site_url=site_url,
         language=language,
+        business_description=business_description,
     )

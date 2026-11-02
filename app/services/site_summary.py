@@ -66,6 +66,39 @@ Rules:
 """
 
 
+def knowledge_fallback_intro(
+    site_id: str,
+    business_description: str = "",
+    language: str = "fr",
+) -> str:
+    """Presentation without LLM — manual description + indexed document/crawl chunks."""
+    from app.services.welcome_compose import _SHORT_WELCOME
+
+    language = normalize_language_code(language)
+    hello, question, _ = _SHORT_WELCOME.get(language, _SHORT_WELCOME["fr"])
+    parts = [hello, ""]
+
+    manual = (business_description or "").strip()
+    if manual and is_readable_text(manual, min_len=30):
+        parts.append(manual[:1200])
+    else:
+        bullets: list[str] = []
+        for chunk in _fetch_site_context(site_id, limit=6):
+            line = clean_text_line(chunk.get("content", ""))[:240].strip()
+            if line and is_readable_text(line, min_len=25):
+                bullets.append(f"- {line}")
+            if len(bullets) >= 5:
+                break
+        if bullets:
+            parts.extend(bullets)
+        else:
+            return ""
+
+    parts.extend(["", question])
+    text = "\n".join(parts).strip()
+    return text if is_readable_text(text, min_len=40) else ""
+
+
 def _fetch_site_context(site_id: str, limit: int = 10) -> list[dict]:
     supabase = get_supabase()
     overview = get_site_overview(site_id, limit=4)
@@ -101,17 +134,22 @@ async def generate_company_intro(
     site_name: str,
     language: str = "fr",
     site_url: str = "",
+    business_description: str = "",
 ) -> str:
-    """Generate a rich site presentation from the client's crawled pages."""
+    """Generate a rich welcome intro from crawled pages, documents, or manual description."""
     chunks = _fetch_site_context(site_id)
-    if not chunks:
-        return ""
+    manual = (business_description or "").strip()
 
-    context = "\n\n---\n\n".join(
-        f"[{chunk.get('title', 'Page')}]({chunk.get('source_url', '')})\n"
-        f"{clean_text_line(chunk.get('content', ''))[:900]}"
-        for chunk in chunks[:8]
-    )
+    if chunks:
+        context = "\n\n---\n\n".join(
+            f"[{chunk.get('title', 'Page')}]({chunk.get('source_url', '')})\n"
+            f"{clean_text_line(chunk.get('content', ''))[:900]}"
+            for chunk in chunks[:8]
+        )
+    elif manual:
+        context = f"[Description de l'activité]\n{manual[:4000]}"
+    else:
+        return ""
 
     try:
         client = AsyncAnthropic(api_key=settings.anthropic_api_key)
@@ -129,7 +167,7 @@ async def generate_company_intro(
                     "content": (
                         f"Dashboard label: {site_name}\n"
                         f"Site URL: {site_url or 'not provided'}\n\n"
-                        f"Crawled site content:\n{context}"
+                        f"Knowledge base (site, documents, manual description):\n{context}"
                     ),
                 }
             ],
@@ -151,6 +189,7 @@ async def ensure_welcome_intro(
     language: str = "fr",
     *,
     persist: bool = True,
+    business_description: str = "",
 ) -> str:
     """Return stored intro for `language` or generate + optionally persist."""
     language = normalize_language_code(language)
@@ -169,9 +208,17 @@ async def ensure_welcome_intro(
     if legacy_intro and is_usable_intro(legacy_intro) and stored_lang == language:
         return legacy_intro
 
-    intro = await generate_company_intro(site_id, site_name, language, site_url=site_url)
+    intro = await generate_company_intro(
+        site_id,
+        site_name,
+        language,
+        site_url=site_url,
+        business_description=business_description,
+    )
     if not intro:
         intro = await _translate_intro_from_cache(intros, config, site_name, language)
+    if not intro:
+        intro = knowledge_fallback_intro(site_id, business_description, language)
 
     if intro and persist:
         _persist_intro(site_id, intro, language)

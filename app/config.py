@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from pydantic import model_validator
+from pydantic import AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _API_DIR = Path(__file__).resolve().parent.parent
@@ -13,6 +13,13 @@ class Settings(BaseSettings):
     debug: bool = False
     cors_origins: str = "http://localhost:3000"
 
+    database_url: str = ""
+    auth_jwt_secret: str = Field(
+        default="",
+        validation_alias=AliasChoices("AUTH_SECRET", "AUTH_JWT_SECRET"),
+    )
+
+    # Legacy (ignoré si DATABASE_URL est défini)
     supabase_url: str = ""
     supabase_service_key: str = ""
     supabase_jwt_secret: str = ""
@@ -37,6 +44,16 @@ class Settings(BaseSettings):
     widget_cdn_url: str = "https://cdn.example.com/widget.js"
     app_url: str = "http://localhost:3000"
     api_url: str = "http://localhost:8000/api/v1"
+
+    ocr_enabled: bool = True
+    ocr_languages: str = "fra+eng"
+    ocr_render_scale: float = 2.0
+
+    @model_validator(mode="after")
+    def _sync_auth_secret(self) -> "Settings":
+        if not self.auth_jwt_secret.strip() and self.supabase_jwt_secret.strip():
+            object.__setattr__(self, "auth_jwt_secret", self.supabase_jwt_secret.strip())
+        return self
 
     @model_validator(mode="after")
     def _load_firebase_from_file(self) -> "Settings":
